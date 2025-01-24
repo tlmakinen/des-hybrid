@@ -28,6 +28,15 @@ from tensorflow_probability.substrates.jax import distributions as tfd
 
 
 from pathlib import Path
+import cloudpickle as pickle
+
+def save_obj(obj, name ):
+    with open(name + '.pkl', 'wb') as f:
+        pickle.dump(obj, f)
+
+def load_obj(name):
+    with open(name, 'rb') as f:
+        return pickle.load(f)
 #Path("/my/directory").mkdir(parents=True, exist_ok=True)
 
 
@@ -142,6 +151,7 @@ class myNPE(NE):
                 optimizer=optimizer,
                 n_iter=n_iter,
                 n_early_stopping_patience=n_early_stopping_patience,
+                outdir=outdir,
                 n_atoms=self.num_atoms,
             )
         else:
