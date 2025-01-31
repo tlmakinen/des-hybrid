@@ -475,7 +475,7 @@ def my_make_mdn(
             tfd.Categorical(logits=logits),
             tfd.MultivariateNormalDiag(
                 mu.reshape(n, n_components, n_dimension),
-                jnp.exp(sigma.reshape(n, n_components, n_dimension)),
+                nn.softplus(sigma.reshape(n, n_components, n_dimension)),
             ),
         )
         if method == "sample":
