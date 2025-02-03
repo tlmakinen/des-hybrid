@@ -17,7 +17,7 @@ from sbijax._src.util.early_stopping import EarlyStopping
 #from sbijax._src.util.dataloader import as_batch_iterators
 
 from collections.abc import Iterable
-from typing import Callable, Sequence
+from typing import Callable, Sequence, Any
 
 import haiku as hk
 import haiku.experimental.flax as hkflax
@@ -30,6 +30,10 @@ from tensorflow_probability.substrates.jax import distributions as tfd
 from pathlib import Path
 import cloudpickle as pickle
 
+from network.dataloaders import *
+
+Array = Any
+
 def save_obj(obj, name ):
     with open(name + '.pkl', 'wb') as f:
         pickle.dump(obj, f)
@@ -39,47 +43,45 @@ def load_obj(name):
         return pickle.load(f)
 #Path("/my/directory").mkdir(parents=True, exist_ok=True)
 
+@jax.jit
+def smooth_leaky(x: Array) -> Array:
+  r"""Smooth Leaky rectified linear unit activation function.
+
+  Computes the element-wise function:
+
+  .. math::
+    \mathrm{smooth\_leaky}(x) = \begin{cases}
+      x, & x \leq -1\\
+      - |x|^3/3, & -1 \leq x < 1\\
+      3x & x > 1
+    \end{cases}
+
+  Args:
+    x : input array
+  """
+  return jnp.where(x < -1, x, jnp.where((x < 1), ((-(jnp.abs(x)**3) / 3) + x*(x+2) + (1/3)), 3*x)) / 3.5
 
 
-class MLPNetwork(nn.Module):
-    """simple fullly-connected network
-
-    Args:
-        hidden_channels (Sequence): hidden layers for dense network
-        n_summaries (int): number of outputs
-        act: (Callable): activation function
-        sigmoid_out (bool): whether or not to incorporate a sigmoid function on the outputs
-
-    Returns:
-        _type_: _description_
+class MLP(nn.Module):
     """
-    hidden_channels: Sequence
-    n_summaries: int
+    fully connected network
+    """ 
+    features: Sequence[int]
     act: Callable = nn.relu
-    sigmoid_out: bool = False
+    activate_final: bool = False
 
-
-    def setup(self):
-        self.embed = nn.Dense(450)
-        self.embed2 = nn.Dense(500)
-        #self.layernorm = nn.LayerNorm()
-        self.net = MLP(self.hidden_channels + (self.n_summaries,), act=self.act)
-
+    @nn.compact
     def __call__(self, x):
+        for feat in self.features[:-1]:
+            x = self.act(nn.Dense(feat)(x))
+        x = nn.Dense(self.features[-1])(x)
 
-        # cut down mass value
-        x = slice_cls_single(x)
-        x = x.reshape(-1)
-        x = self.embed(x)
-        # x = self.layernorm(x)
-        #x = self.embed2(x)
-        x = self.act(x)
-        x = self.net(x)
-
-        if self.sigmoid_out:
-            x = nn.sigmoid(x)
+        if self.activate_final:
+            x = self.act(x)
 
         return x
+
+
 
 
 class MDN(nn.Module):
@@ -230,6 +232,9 @@ class EPE_minimiser():
                 itr_key, data, batch_size, percentage_data_as_validation_set,
                 noise_simulator
             )
+            n = data["y"].shape[0]
+            train_iter.num_batch_per_epoch = int(n * (1.0-percentage_data_as_validation_set)) // batch_size
+            val_iter.num_batch_per_epoch   = int(n * (percentage_data_as_validation_set)) // batch_size
         else:
             train_iter = train_dataset
             val_iter = val_dataset
@@ -288,12 +293,15 @@ class EPE_minimiser():
 
             def loss_fn(params, rng, **batch):
                 # upack tuple
-                lp = self.model.apply(
+                _apply = lambda y,x :self.model.apply(
                     params,
-                    None,
-                    method="log_prob",
-                    y=jnp.array(batch["theta"]),
-                    x=batch["y"],
+                    method=self.model.log_prob,
+                    x=x, y=y
+                )
+
+                lp = jax.vmap(_apply)(
+                    jnp.array(batch["theta"]), # y=theta
+                    batch["y"],                # x=data
                 )
                 return -jnp.mean(lp)
 
@@ -361,8 +369,18 @@ class EPE_minimiser():
         return best_params, losses
 
     def _init_params(self, rng_key, **init_data):
+        """Initialise NDE model parameters. This method
+        assumes that you have batched data, but a network defined
+        for a single data input.
+
+        Args:
+            rng_key (jax.random.PRNGKey): random key
+
+        Returns:
+            model parameters (dict): chained NDE and EPE minimiser model parameters
+        """
         params = self.model.init(
-            rng_key, method="log_prob", y=jnp.array(init_data["theta"]), x=init_data["y"]
+            rng_key, method=self.model.log_prob, y=jnp.array(init_data["theta"][0]), x=init_data["y"][0]
         )
         return params
 
@@ -371,12 +389,15 @@ class EPE_minimiser():
         if self.n_round == 0:
 
             def loss_fn(rng, **batch):
-                lp = self.model.apply(
+                _apply = lambda y,x : self.model.apply(
                     params,
-                    None,
-                    method="log_prob",
-                    y=jnp.array(batch["theta"]),
-                    x=batch["y"],
+                    method=self.model.log_prob,
+                    x=x, y=y
+                )
+
+                lp = jax.vmap(_apply)(
+                    jnp.array(batch["theta"]), # y=theta
+                    batch["y"],                # x=data
                 )
                 return -jnp.mean(lp)
 
