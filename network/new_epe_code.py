@@ -34,6 +34,8 @@ from network.dataloaders import *
 
 Array = Any
 
+
+
 def save_obj(obj, name ):
     with open(name + '.pkl', 'wb') as f:
         pickle.dump(obj, f)
@@ -41,7 +43,10 @@ def save_obj(obj, name ):
 def load_obj(name):
     with open(name, 'rb') as f:
         return pickle.load(f)
-#Path("/my/directory").mkdir(parents=True, exist_ok=True)
+    
+
+def is_batchable(x: Any, batch_size: int):
+    return hasattr(x, "shape") and len(x.shape) > 0 and x.shape[0] == batch_size
 
 @jax.jit
 def smooth_leaky(x: Array) -> Array:
@@ -122,7 +127,7 @@ class MDN(nn.Module):
 class EPEModel(nn.Module):
 
     def setup(self):
-        self.name = name
+        pass
 
     def __call__(self, x, theta):
 
@@ -370,8 +375,8 @@ class EPE_minimiser():
 
     def _init_params(self, rng_key, **init_data):
         """Initialise NDE model parameters. This method
-        assumes that you have batched data, but a network defined
-        for a single data input.
+        assumes that you have batched data, but want to keep your 
+        network defined for a single data input.
 
         Args:
             rng_key (jax.random.PRNGKey): random key
@@ -379,8 +384,10 @@ class EPE_minimiser():
         Returns:
             model parameters (dict): chained NDE and EPE minimiser model parameters
         """
+        # assumes batched data, so here we need to extract the first component from the nested structure
+        init_data = jax.tree.map(lambda x: x[0], init_data) 
         params = self.model.init(
-            rng_key, method=self.model.log_prob, y=jnp.array(init_data["theta"][0]), x=init_data["y"][0]
+            rng_key, method=self.model.log_prob, y=jnp.array(init_data["theta"]), x=init_data["y"]
         )
         return params
 
