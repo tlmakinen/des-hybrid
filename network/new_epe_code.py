@@ -11,9 +11,9 @@ from jax._src.flatten_util import ravel_pytree
 from tqdm import tqdm
 import sys,os
 
-from sbijax._src._ne_base import NE
-from sbijax._src.util.data import as_inference_data
-from sbijax._src.util.early_stopping import EarlyStopping
+#from sbijax._src._ne_base import NE
+#from sbijax._src.util.data import as_inference_data
+#from earlystopping import EarlyStopping
 #from sbijax._src.util.dataloader import as_batch_iterators
 
 from collections.abc import Iterable
@@ -26,13 +26,62 @@ import jax
 from jax import numpy as jnp
 from tensorflow_probability.substrates.jax import distributions as tfd
 
-
 from pathlib import Path
 import cloudpickle as pickle
 
 from network.dataloaders import *
 
 Array = Any
+
+
+import dataclasses
+import math
+
+
+# pylint: disable=missing-function-docstring
+# adapted from sbijax
+@dataclasses.dataclass
+class EarlyStopping:
+    """Early stopping of neural network training."""
+
+    min_delta: float = 0
+    patience: int = 0
+    best_metric: float = float("inf")
+    patience_count: int = 0
+    should_stop: bool = False
+
+    def reset(self):
+        """Reset the object.
+
+        Returns:
+          self
+        """
+        self.best_metric = float("inf")
+        self.patience_count = 0
+        self.should_stop = False
+        return self
+
+    def update(self, metric):
+        """Update the stopping criterion.
+
+        Args:
+            metric: the early stopping criterion metric as float
+
+        Returns:
+            tuple
+        """
+        if (
+            math.isinf(self.best_metric)
+            or self.best_metric - metric > self.min_delta
+        ):
+            self.best_metric = metric
+            self.patience_count = 0
+            return True, self
+
+        should_stop = self.patience_count >= self.patience or self.should_stop
+        self.should_stop = should_stop
+        self.patience_count = self.patience_count + 1
+        return False, self
 
 
 

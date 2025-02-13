@@ -4,9 +4,8 @@ from jax import Array
 from jax import numpy as jnp
 from jax import random as jr
 from jax._src.flatten_util import ravel_pytree
-from typing import Callable
+from typing import Callable, Any
 
-from typing import Any
 
 PyTree = Any
 

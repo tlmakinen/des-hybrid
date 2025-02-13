@@ -17,7 +17,7 @@ from sbijax._src.util.early_stopping import EarlyStopping
 #from sbijax._src.util.dataloader import as_batch_iterators
 
 from collections.abc import Iterable
-from typing import Callable, Sequence
+from typing import Callable, Sequence, Any
 
 import haiku as hk
 import haiku.experimental.flax as hkflax
@@ -37,6 +37,9 @@ def save_obj(obj, name ):
 def load_obj(name):
     with open(name, 'rb') as f:
         return pickle.load(f)
+    
+
+
 #Path("/my/directory").mkdir(parents=True, exist_ok=True)
 
 
@@ -264,9 +267,12 @@ class myNPE(NE):
                 best_loss = validation_loss
                 best_params = params.copy()
                 save_obj(best_params, outdir + "best_params")
+                np.savez(outdir + "history",
+                         train_val_losses=jnp.vstack(losses)[: (i + 1), :])
 
         #self.n_round += 1
         losses = jnp.vstack(losses)[: (i + 1), :]
+
         return best_params, losses
 
     def _init_params(self, rng_key, **init_data):
