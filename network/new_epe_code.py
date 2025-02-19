@@ -143,18 +143,20 @@ class MDN(nn.Module):
     n_components: int
     n_dimension: int
     act: Callable = nn.relu
+    theta_star: Any = None
     
     def setup(self):
         self.net = MLP(self.hidden_channels, act=self.act, activate_final=True)
         self.logits_net = nn.Dense(self.n_components)
         self.mu_sigma_net = nn.Dense(self.n_components * self.n_dimension * 2)
-
-
-    #def embed(self, x):
-    #    return self.mlp(x)
-
+        # centre the MDN around a fiducial for easier training (optional)
+        #self.theta_star = jnp.zeros((self.n_dimension,)) if self.theta_star is None else self.theta_star
+        # assert self.theta_star.shape[0] != self.n_dimension, "theta_star must have the same dimensionality as theta !"
 
     def __call__(self, x, theta):
+
+        theta_star = jnp.zeros((self.n_dimension,)) if self.theta_star is None else self.theta_star
+        theta -= theta_star # centre around fiducial point (defaults to zero)
         
         x = self.net(x)
         logits = self.logits_net(x)
