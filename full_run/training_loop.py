@@ -19,6 +19,10 @@ import cloudpickle as pickle
 
 
 
+
+
+
+
 def run_training_loop(model, 
                              key,
                              train_data, # tuple of (d ,theta)
@@ -32,20 +36,23 @@ def run_training_loop(model,
 
     
     data_train, theta_train = train_data
-    data_test, theta_test =  test_data
+    data_test_, theta_test_ =  test_data
 
     data_single_shape = data_train[0].shape
     
     n_train = data_train.shape[0]
-    
+
+
+    # ---- CHOP DATA ----
     remainder = batch_size * (data_train.shape[0] // batch_size)
-    
     data_ = data_train.reshape((-1, batch_size,) + data_single_shape)
     theta_ = theta_train.reshape(-1, batch_size, n_params)
+
+    remainder_test = batch_size * (data_test_.shape[0] // batch_size)
+    data_test = data_test_[:remainder_test].reshape((-1, batch_size,) + data_single_shape)
+    theta_test = theta_test_[:remainder_test].reshape(-1, batch_size, n_params)
+    # ---- ----
     
-    # reshape the test data into batches
-    data_test = data_test[:remainder].reshape((-1, batch_size,) + data_single_shape)
-    theta_test = theta_test[:remainder].reshape(-1, batch_size, n_params)
 
     @jax.jit
     def logprob_loss(w, x_batched, theta_batched):
@@ -129,6 +136,14 @@ def run_training_loop(model,
     
     for j in pbar:
           key,rng = jax.random.split(key)
+
+          # ---- CHOP DATA ----
+          remainder = batch_size * (data_train.shape[0] // batch_size)
+    
+          data_ = data_train.reshape((-1, batch_size,) + data_single_shape)
+          theta_ = theta_train.reshape(-1, batch_size, n_params)
+
+          # ---- ----
     
           # shuffle data every epoch
           randidx = jr.permutation(key, jnp.arange(theta_.reshape(-1, n_params).shape[0]), independent=True)

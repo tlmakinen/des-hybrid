@@ -6,46 +6,40 @@ from tqdm import tqdm
 import optax
 
 from tensorflow_probability.substrates.jax import distributions as tfd
-
-
 from typing import Sequence, Any, Callable
-Array = Any
 
 import numpy as np
 import flax.linen as nn
 import matplotlib.pyplot as plt
 import cloudpickle as pickle
 
-
 import yaml,sys,os
 from pathlib import Path
+Array = Any
+
+def load_config(config_path):
+    with open(os.path.join(config_path)) as file:
+        config = yaml.safe_load(file)
+    return config
+
+# load config file from command line
+config = load_config(sys.argv[1])
+
+# hack to ensure we can see all the utils code
+sys.path.append(config["network_code_dir"])
 
 from training_loop import *
 from network.new_epe_code import *
 
 
 
-def load_config(config_path):
-    with open(os.path.join(config_path)) as file:
-        config = yaml.safe_load(file)
-
-    return config
-
-# load config file from command line
-config = load_config(sys.argv[1])
-
-
-
-# hack to ensure we can see all the utils code
-sys.path.append(config["network_code_dir"])
 
 
 
 
+print("loading data ...")
 
-
-
-file = np.load(os.path.join(config["cls_net_dir"], config["cls_dataset"]))
+file = np.load(config["cls"]["cls_dataset"])
 
 params_train = file["params_train"]
 cls_train = file["cls_train"]
@@ -60,6 +54,8 @@ cls_test = file["cls_test"]
 params_sys = file["params_sys"]
 cls_sys = file["cls_sys"]
 
+print(params_train[:, 2].min())
+
 
 # TODO: SHOULD WE MOVE THIS TO SEPARATE MODULE ?
 
@@ -69,7 +65,7 @@ S2_cls = (cls_train**2).mean(0)
 
 mean_cl = S1_cls
 std_cl = np.sqrt(S2_cls - mean_cl**2)
-cut_idx = config["cls_cut_idx"]
+cut_idx = config["cls"]["cut_idx"]
 
 
 def slice_cls(cls):
@@ -118,11 +114,12 @@ class ClsModel(EPEModel, nn.Module):
     n_summaries: int
     n_params: int = 3
     n_components: int = 4
+    n_hidden_mdn: int = 100
     
 
     def setup(self):
         self.mdn = MDN(
-                        hidden_channels=[100],
+                        hidden_channels=[self.n_hidden_mdn],
                         n_components=self.n_components,
                         n_dimension=self.n_params,
                         act=nn.relu)
@@ -132,6 +129,8 @@ class ClsModel(EPEModel, nn.Module):
                         n_summaries=self.n_summaries,
                         act=smooth_leaky,
                         sigmoid_out=False)
+    
+        #self.norm = nn.LayerNorm()
 
     def get_embed(self, x):
         return self.mlp(x)
@@ -143,17 +142,18 @@ class ClsModel(EPEModel, nn.Module):
 
     def __call__(self, x, theta):
         x = self.mlp(x)
-        #return x
         return self.mdn(x, theta)
     
 
-
+print("training network ...")
+print("\n extracting %d summaries"%(config["n_summaries_cls"]))
 
 key = jr.PRNGKey(4)
 cls_single_shape = (10, 2, 4, 28,)
 
 
-model = ClsModel(n_summaries=config["n_summaries_cls"])
+model = ClsModel(n_summaries=int(config["n_summaries_cls"]),)
+                #n_hidden_mdn=config["cls"]["n_hidden_mdn"])
 
 w = model.init(key, cls_train[0], jnp.ones(3,), method=model.log_prob)
 
@@ -165,15 +165,17 @@ w, losses = run_training_loop(model, key, (cls_train, params_train),
                                     (cls_test, params_test), 
                                         learning_rate=1e-5,
                                         schedule=True,
-                                        epochs=100,
-                                        batch_size=32)
+                                        epochs=config["cls"]["epochs"],
+                                        batch_size=128)
 
+
+print("saving everything")
 
 # save weights, losses, and config script to the output directory
-outdir = os.path.join(config["project_dir"],  config["cls_net_dir"]
+outdir = os.path.join(config["project_dir"],  config["cls"]["net_dir"])
 Path(outdir).mkdir(parents=True, exist_ok=True)
 
 # save it all
-save_obj(w, os.path.join(outdir, "w_cls_compress.pkl"))
-save_obj(losses, os.path.join(outdir, "history.pkl"))
-save_obj(config, os.path.join(outdir, "config_dict.pkl")) # save config just in case
+save_obj(w, os.path.join(outdir, config["cls"]["w_filename"].split(".pkl")[0]))
+save_obj(losses, os.path.join(outdir, "history"))
+save_obj(config, os.path.join(outdir, "config_dict")) # save config just in case

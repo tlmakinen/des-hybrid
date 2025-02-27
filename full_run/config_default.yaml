@@ -14,13 +14,17 @@ model_key: 44       # initial random seeds
 
 
 # Cls compression network hyperparameters
-hidden_size: 256    
-n_layers: 10
-cls_cut_idx: 22    # which \ell mode to cut at
-cls_net_dir: cls_net
-cls_dataset: cls_train_test_sys.npz  # consolidated Cls dataset for quick compression training
-cls_normalisation_stats_filename:  cls_statistics_for_normalisation.npz
-cls_w_filename: w_cls_compress_relu.pkl
+cls:
+  hidden_size: 256    
+  n_layers: 10
+  cut_idx: 22    # which \ell mode to cut at
+  net_dir: cls_net
+  cls_dataset: /data103/makinen/des_results/cls_net/cls_train_test_sys.npz  # consolidated Cls dataset for quick compression training
+  cls_normalisation_stats_filename:  /data103/makinen/des_results/cls_net/cls_statistics_for_normalisation.npz
+  w_filename: w_cls_compress.pkl
+  n_hidden_mdn: 100
+  n_layers_mdn: 1
+  epochs: 300
 
 # patch compression network hyperparameters
 network_type: cnn  # either "cnn" or "mpk" --> hard-code the filter options for default cnn
@@ -31,13 +35,14 @@ n_filters: 32 # number of cnn filters (32 is default)
 
 
 # MDN network parameters
-n_hidden_mdn: [100]
+n_hidden_mdn: 100
+n_layers_mdn: 1
 n_components: 4    # need to test this
 act_mdn: relu      
 
 
 # SUMMARY STATISTIC DIMENSIONS
-n_summaries_cls: 10
+n_summaries_cls: 4    # default 10
 n_summaries_A: 4
 n_summaries_B: 4
 n_summaries_C: 4
@@ -68,14 +73,11 @@ max_iterations: 7000  # maximum number of training epochs
 
 
 
-network_code_dir: /home/makinen/repositories/des-hybrid/network/
+network_code_dir: /home/makinen/repositories/des-hybrid/
 patch_net_w_dir: /data103/makinen/des_results/patch_nets/
 patch_w_filename: w_cls_compress_default.pkl  # rename per patch i reckon
 
 
-
-weightdir: /data101/makinen/lemur_sims/pm_sims/N192_hires/N192_all_cls/         # where to save the model weights after training
-weightfile: imnn_w
 
 # different dirs for each patch ?
 
