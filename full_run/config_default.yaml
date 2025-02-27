@@ -1,0 +1,103 @@
+# for learning new summaries for DES Y3 convergence maps
+
+
+# CONFIGURATION RUN NAME
+# output directory --> keep Cls stuff in top level
+project_dir: /data103/makinen/des_results/full_run/
+
+
+theta_star: [0.3, 0.8, -1.0]   # fiducial model for centering MDNs
+
+
+n_params: 3         
+model_key: 44       # initial random seeds
+
+
+# Cls compression network hyperparameters
+hidden_size: 256    
+n_layers: 10
+cls_cut_idx: 22    # which \ell mode to cut at
+cls_net_dir: cls_net
+cls_dataset: cls_train_test_sys.npz  # consolidated Cls dataset for quick compression training
+cls_normalisation_stats_filename:  cls_statistics_for_normalisation.npz
+cls_w_filename: w_cls_compress_relu.pkl
+
+# patch compression network hyperparameters
+network_type: cnn  # either "cnn" or "mpk" --> hard-code the filter options for default cnn
+act_cnn: relu          # either "relu" or "smooth_leaky"
+act_dense: smooth_leaky  # for dense network activations --> in MPK net, these are smooth_leaky
+n_extra : 4   # number of output summaries
+n_filters: 32 # number of cnn filters (32 is default)
+
+
+# MDN network parameters
+n_hidden_mdn: [100]
+n_components: 4    # need to test this
+act_mdn: relu      
+
+
+# SUMMARY STATISTIC DIMENSIONS
+n_summaries_cls: 10
+n_summaries_A: 4
+n_summaries_B: 4
+n_summaries_C: 4
+
+
+
+
+
+
+## multipole kernel embedding
+mpk_kernel: 5                # multipole kernel size
+polynomial_degrees: [0, 1, 2] # mpk expansion
+mpk_strides: [1, 1]           # strides for embedding layer
+mpk_input_filters: [4, 6]    # input number of channels for MPK embedding. Here we have num_tomo=4 inputs and 6 inputs 
+                       # for the residual mpk embedding for \ell=[0,1,2] 
+                       # TODO: determine these automatically
+filters: [1,1,1]       # initial filter count for incept-stride network
+
+
+
+# patch training parameters
+learning_rate: 0.0005    # learning rate
+gradient_clip: 1.0     # gradient clip value
+
+patience: 100         # how many epochs to wait to stop training
+min_iterations: 200   # minimum number of training epochs 
+max_iterations: 7000  # maximum number of training epochs
+
+
+
+network_code_dir: /home/makinen/repositories/des-hybrid/network/
+patch_net_w_dir: /data103/makinen/des_results/patch_nets/
+patch_w_filename: w_cls_compress_default.pkl  # rename per patch i reckon
+
+
+
+weightdir: /data101/makinen/lemur_sims/pm_sims/N192_hires/N192_all_cls/         # where to save the model weights after training
+weightfile: imnn_w
+
+# different dirs for each patch ?
+
+
+
+
+# output directories for summaries etc
+# output_directory: ./results/N192_all_cls/
+# output_plot_directory: ./results/N192_all_cls/plots/
+
+
+#### DENSITY ESTIMATOR DEFAULTS
+networks: ['maf', 'made']
+n_hidden_nde: [40,50,50,50]
+
+
+# order of script:
+# 
+# 1. pull in consolidated Cls filename
+# 2. run MDN compression on Cls -> create padded output vector for other patch summaries [Cls | A | B | C]
+# 3. run patch A, allowing Cls to vary w/noise
+# 4. save summaries to padded summary vector
+# 5. run patch B
+# 6. run patch C
+# 7. optionally, rerun patch A again but with existing weights
