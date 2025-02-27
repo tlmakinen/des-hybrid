@@ -25,13 +25,20 @@ cls:
   n_hidden_mdn: 100
   n_layers_mdn: 1
   epochs: 300
+  n_components: 4
 
 # patch compression network hyperparameters
-network_type: cnn  # either "cnn" or "mpk" --> hard-code the filter options for default cnn
-act_cnn: relu          # either "relu" or "smooth_leaky"
-act_dense: smooth_leaky  # for dense network activations --> in MPK net, these are smooth_leaky
-n_extra : 4   # number of output summaries
-n_filters: 32 # number of cnn filters (32 is default)
+patch_net:
+  network_type: cnn  # either "cnn" or "mpk" --> hard-code the filter options for default cnn
+  act_cnn: relu          # either "relu" or "smooth_leaky"
+  act_dense: smooth_leaky  # for dense network activations --> in MPK net, these are smooth_leaky
+  n_extra : 4   # number of output summaries
+  n_filters: 32 # number of cnn filters (32 is default)
+  epochs: 1000
+  n_components: 4
+  n_hidden_mdn: 100
+  n_layers_mdn: 1
+  
 
 
 # MDN network parameters
