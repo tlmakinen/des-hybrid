@@ -28,16 +28,51 @@ config = load_config(sys.argv[1])
 # hack to ensure we can see all the utils code
 sys.path.append(config["network_code_dir"])
 
+
 from training_loop import *
 from network.new_epe_code import *
 
+print("loading cls data ...")
 
-def slice_cls(cls, cut_idx):
+file = np.load(config["cls"]["cls_dataset"])
+
+params_train = file["params_train"]
+cls_train = file["cls_train"]
+
+params_LFI = file["params_lfi"]
+cls_lfi = file["cls_lfi"]
+
+params_test = file["params_test"]
+cls_test = file["cls_test"]
+
+
+params_sys = file["params_sys"]
+cls_sys = file["cls_sys"]
+
+
+# TODO: SHOULD WE MOVE THIS TO SEPARATE MODULE ?
+
+# calculate scaling for standardisation
+S1_cls = cls_train.mean(0)
+S2_cls = (cls_train**2).mean(0)
+
+mean_cl = S1_cls
+std_cl = np.sqrt(S2_cls - mean_cl**2)
+cut_idx = config["cls"]["cut_idx"]
+
+slice_cls = lambda d: slice_cls(d, cut_idx=cut_idx)
+slice_cls_single = lambda d: slice_cls_single(d, cut_idx=cut_idx)
+
+
+print(params_train[:, 2].min())
+
+
+def slice_cls(cls, cut_idx=config["cls"]["cut_idx"]):
     cls = (cls - mean_cl) / std_cl
     cls = cls[:, :, 0, 0::3, :cut_idx]
     return cls.reshape(cls.shape[0], -1)
 
-def slice_cls_single(cls, cut_idx):
+def slice_cls_single(cls, cut_idx=config["cls"]["cut_idx"]):
     cls = (cls - mean_cl) / std_cl
     cls = cls[:, 0, 0::3, :cut_idx]
     return cls.reshape(cls.shape[0], -1)
@@ -110,75 +145,41 @@ class ClsModel(EPEModel, nn.Module):
         return self.mdn(x, theta)
     
 
-if __name__ == "main":
+#if __name__ == "main":
+#
 
 
+print("training network ...")
+print("\n extracting %d summaries"%(config["n_summaries_cls"]))
 
-    print("loading data ...")
-
-    file = np.load(config["cls"]["cls_dataset"])
-
-    params_train = file["params_train"]
-    cls_train = file["cls_train"]
-
-    params_LFI = file["params_lfi"]
-    cls_lfi = file["cls_lfi"]
-
-    params_test = file["params_test"]
-    cls_test = file["cls_test"]
+key = jr.PRNGKey(4)
+cls_single_shape = (10, 2, 4, 28,)
 
 
-    params_sys = file["params_sys"]
-    cls_sys = file["cls_sys"]
+model = ClsModel(n_summaries=int(config["n_summaries_cls"]),)
+                #n_hidden_mdn=config["cls"]["n_hidden_mdn"])
 
-    print(params_train[:, 2].min())
-
-
-    # TODO: SHOULD WE MOVE THIS TO SEPARATE MODULE ?
-
-    # calculate scaling for standardisation
-    S1_cls = cls_train.mean(0)
-    S2_cls = (cls_train**2).mean(0)
-
-    mean_cl = S1_cls
-    std_cl = np.sqrt(S2_cls - mean_cl**2)
-    cut_idx = config["cls"]["cut_idx"]
-
-    slice_cls = lambda d: slice_cls(d, cut_idx=cut_idx)
-    slice_cls_single = lambda d: slice_cls_single(d, cut_idx=cut_idx)
-
-
-    print("training network ...")
-    print("\n extracting %d summaries"%(config["n_summaries_cls"]))
-
-    key = jr.PRNGKey(4)
-    cls_single_shape = (10, 2, 4, 28,)
-
-
-    model = ClsModel(n_summaries=int(config["n_summaries_cls"]),)
-                    #n_hidden_mdn=config["cls"]["n_hidden_mdn"])
-
-    w = model.init(key, cls_train[0], jnp.ones(3,), method=model.log_prob)
+w = model.init(key, cls_train[0], jnp.ones(3,), method=model.log_prob)
 
 
 
 
 
-    w, losses = run_training_loop(model, key, (cls_train, params_train),
-                                        (cls_test, params_test), 
-                                            learning_rate=1e-5,
-                                            schedule=True,
-                                            epochs=config["cls"]["epochs"],
-                                            batch_size=128)
+w, losses = run_training_loop(model, key, (cls_train, params_train),
+                                    (cls_test, params_test), 
+                                        learning_rate=1e-5,
+                                        schedule=True,
+                                        epochs=config["cls"]["epochs"],
+                                        batch_size=128)
 
 
-    print("saving everything")
+print("saving everything")
 
-    # save weights, losses, and config script to the output directory
-    outdir = os.path.join(config["project_dir"],  config["cls"]["net_dir"])
-    Path(outdir).mkdir(parents=True, exist_ok=True)
+# save weights, losses, and config script to the output directory
+outdir = os.path.join(config["project_dir"],  config["cls"]["net_dir"])
+Path(outdir).mkdir(parents=True, exist_ok=True)
 
-    # save it all
-    save_obj(w, os.path.join(outdir, config["cls"]["w_filename"].split(".pkl")[0]))
-    save_obj(losses, os.path.join(outdir, "history"))
-    save_obj(config, os.path.join(outdir, "config_dict")) # save config just in case
+# save it all
+save_obj(w, os.path.join(outdir, config["cls"]["w_filename"].split(".pkl")[0]))
+save_obj(losses, os.path.join(outdir, "history"))
+save_obj(config, os.path.join(outdir, "config_dict")) # save config just in case

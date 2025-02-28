@@ -10,12 +10,10 @@ from tensorflow_probability.substrates.jax import distributions as tfd
 import matplotlib.pyplot as plt
 import numpy as np
 
-import glob
-import os
 
 import tensorflow as tf
 import tensorflow_datasets as tfds
-import sys,os,re
+import sys,os,re,yaml,glob
 
 def load_config(config_path):
     with open(os.path.join(config_path)) as file:
@@ -34,7 +32,7 @@ from network.new_epe_code import *
 
 
 # ---- config stuff
-patch = "A"   # should probably arg to call
+patch = sys.argv[2]   # should probably arg to call
 
 base_path = "/data103/makinen/des_sims/Gower_street_SBI_tfrecords/"
 use_noise_realisations =['0','1','2','3','10', '11', '12']#,'11','12','13','14','15']
@@ -247,7 +245,6 @@ with tf.device("CPU"):
                           param_idx=None,
                           to_numpy=True,
                           shuffle=True,
-                          compress_A=False,
                           shuffle_buffer_size=100,
                           drop_remainder=True):
         
@@ -277,13 +274,8 @@ with tf.device("CPU"):
         if shuffle:
             tfdataset = tfdataset.shuffle(shuffle_buffer_size)
 
-        if compress_A:
-            tfdataset = tfdataset.map(lambda maps,vals,cls: \
-                                  compress_patch_A(maps,vals,cls,param_idx=param_idx),\
-                                  num_parallel_calls=tf.data.AUTOTUNE)
         
-        else:
-            tfdataset = tfdataset.map(lambda maps,vals,cls: \
+        tfdataset = tfdataset.map(lambda maps,vals,cls: \
                                   gaussian_noise_augmentation(maps,vals,cls,param_idx=param_idx),\
                                   num_parallel_calls=tf.data.AUTOTUNE)
 
@@ -295,10 +287,7 @@ with tf.device("CPU"):
     
         return tfdataset
     
-    # is it better to consolidate the data in one dictionary or just pass a tuple to the network ?
     
-    # stack A and B patches
-    #train_dataset = tf.data.Dataset.zip((train_dataset,train_datasetB))
     
     def consolidate_dsets(A,B):
         # check that cosmo params are the same    
@@ -354,14 +343,64 @@ with tf.device("CPU"):
     # ----------------------------------------------------------------------------
 
     # ----- dataset code -----
+    print("beginning compression for patch %s")
+
+
+
+    print("collecting datasets ...")
+
+    # ARGPARSE STUFF ?
+    create_new_summary_file = bool(int(sys.argv[3]))
+
+
+
 
     # create empty summaries dataset if we're just dealing with patch A
-    #if patch == "A":
-    #    summaries_A_file = 
     
+    # summaries code
+    # SOME IMPORTANT HYPERPARAMS --> FROM CONFIG
+    N_PARAMS = config["n_params"]
+
+    N_SUMMARIES_CLS = config["n_summaries_cls"]    # default 10
+    N_SUMMARIES_A =   config["n_summaries_A"]
+    N_SUMMARIES_B =   config["n_summaries_B"]
+    N_SUMMARIES_C =   config["n_summaries_C"]
+
+    N_TOTAL_SUMMARIES = N_SUMMARIES_CLS + N_SUMMARIES_A + N_SUMMARIES_B + N_SUMMARIES_C
     
+    if patch == "A":
+        N_EXISTING = N_SUMMARIES_CLS
+    elif patch == "B":
+        N_EXISTING = N_SUMMARIES_CLS + N_SUMMARIES_A
+    else:
+        N_EXISTING =  N_SUMMARIES_CLS + N_SUMMARIES_A + N_SUMMARIES_B 
+
+    print("learning %d new summaries for patch compression"%(N_TOTAL_SUMMARIES - N_EXISTING))
 
 
+
+    if create_new_summary_file:
+        print("creating dummy summary file")
+        summaries_A_file = dict(
+            summaries_lfi=np.zeros((len(lfi_files), N_TOTAL_SUMMARIES)),
+            params_lfi=np.zeros((len(lfi_files), N_PARAMS)),
+            summaries_test=np.zeros((len(test_files), N_TOTAL_SUMMARIES)),
+            params_test=np.zeros((len(test_files), N_PARAMS)),
+            summaries_sys=np.zeros((len(test_sys_files), N_TOTAL_SUMMARIES)),
+            params_sys=np.zeros((len(test_sys_files), N_PARAMS)),
+            summaries_train=np.zeros((len(train_files), N_TOTAL_SUMMARIES)),
+            params_train=np.zeros((len(train_files), N_PARAMS))
+            )
+
+    else:
+        summary_file_path = config["summary_path"] + "patch_%s"%(patch) + ".npz"
+        print("loading existing summary file from %s"%(summary_file_path))
+        summaries_A_file = np.load(summary_file_path)
+
+    
+
+    
+    
     summaries_A_file = np.load("/data103/makinen/des_results/patch_nets/summaries_new_patchA_S8.npz")
 
     # train, test validation datasets
@@ -380,6 +419,17 @@ with tf.device("CPU"):
     
 
 
+    # check to see that parameters line up along datasets
+    if not create_new_summary_file:
+        print('checking that dataset thetas line up')
+        for i in range(2):
+            data = next(iter(test_dataset))
+            match = (data['y']['A']['theta_A'] == data['theta'])[0][0]
+
+        assert not match, "datasets are not lined up !"
+    
+
+
 # ----------------------------------------------------------------------------
 
 from compress_cls import *
@@ -391,7 +441,7 @@ slice_cls = lambda d: slice_cls(d, cut_idx=cut_idx)
 slice_cls_single = lambda d: slice_cls_single(d, cut_idx=cut_idx)
 
 key = jax.random.PRNGKey(0) # pseudo-random key for Jax network.
-cls_model = ClsModel(n_summaries=10)
+cls_model = ClsModel(n_summaries=config["n_summaries_cls"])
 
 cls_single_shape = (10, 2, 4, 28,)
 clsdir = os.path.join(config["project_dir"],  config["cls"]["net_dir"])
@@ -404,18 +454,16 @@ cls_compression = lambda d: cls_model.apply(w_cls_compress, d, method=cls_model.
 # ----------------------------------------------------------------------------
 
 
-# SOME IMPORTANT HYPERPARAMS --> FROM CONFIG
-N_SUMMARIES_CLS = 10
-N_EXTRA_A = 4
-N_TOTAL_SUMMARIES = 14
 
 
-class simpleCNN_B(nn.Module):
+class simplePatchCNN(nn.Module):
     """CNN to extract extra information from WL field"""
     filters: Sequence[int]
     cls_compression: Callable
     n_extra: int = 4
-    n_existing: int = N_TOTAL_SUMMARIES
+    n_summaries_cls: int = N_SUMMARIES_CLS
+    n_existing: int = N_EXISTING
+    n_total: int = N_TOTAL_SUMMARIES
     act_cnn: Callable = nn.relu
     act_dense: Callable = smooth_leaky
     dtype: Any = jnp.float32
@@ -431,9 +479,9 @@ class simpleCNN_B(nn.Module):
         # TAKE THE PATCH A SUMMARIES AND VARY THE CLS COMPRESSION UNDER NOISE
         existing_info = inputs["A"]["summaries"][N_SUMMARIES_CLS:]
 
+        # pass the cls through the network again to increase variation in the optimisation
         cls_summs = self.cls_compression(inputs["B"]["cls"])
         
-        # first just take first four filters (E modes !)
         x = inputs["B"]["kappa"]
         x = x.astype(self.dtype)
 
@@ -464,16 +512,44 @@ class simpleCNN_B(nn.Module):
         x = nn.Dense(self.n_extra, dtype=self.dtype)(x).reshape(-1)
         x = x.reshape(-1).astype(jnp.float32) # make sure output is float32
         x = nn.LayerNorm()(x)
-        x = jnp.concatenate([cls_summs, existing_info.reshape(-1), x])
-        
-        return x
-        
 
+        # concatenate all existing information
+        #x = jnp.concatenate([cls_summs, existing_info.reshape(-1), x])
 
+        # set all existing information in its right place
+        outputs = jnp.zeros((self.n_total,))
+        outputs = outputs.at[:self.n_summaries_cls].set(cls_summs)
+        outputs = outputs.at[self.n_summaries_cls:self.n_existing].set(existing_info.reshape(-1))
+        outputs = outputs.at[self.n_existing:self.n_existing + self.n_extra].set(x)
+
+        return outputs
 
 
 # MODEL --> from config
+print("testing network initialisation ...")
+
 model_key = jr.PRNGKey(int(config["model_key"]))
+
+patch_net = simplePatchCNN(
+                filters=32,
+                act_cnn=nn.relu,
+                act_dense=smooth_leaky,
+                cls_compression=cls_compression,
+                n_extra=4,
+                n_existing=N_EXISTING,
+                dtype=jnp.float32,
+)
+
+
+wembed = patch_net.init(model_key, {"A":{"summaries": jnp.ones((N_TOTAL_SUMMARIES)),
+                                      "cls": jnp.ones((10,2,4,28))},
+                                      "B":{"kappa": jnp.ones((512,512,8)),
+                                      "cls": jnp.ones((10,2,4,28))}
+                                     })
+data = next(iter(train_dataset))
+appl = lambda d: patch_net.apply(wembed, d)
+outs = jax.vmap(appl)(data['y'])
+print("output shape: ", outs.shape)
 
 
 class fullModel(EPEModel, nn.Module):
@@ -488,10 +564,10 @@ class fullModel(EPEModel, nn.Module):
                         n_dimension=self.n_params,
                         act=nn.relu)
         
-        self.embeding_net = simpleCNN_B(
+        self.embeding_net = simplePatchCNN(
                         filters=32,
                         cls_compression=cls_compression,
-                        n_existing=N_TOTAL_SUMMARIES,
+                        n_existing=N_EXISTING,
                         act_cnn=nn.relu,
                         act_dense=smooth_leaky,
                         n_extra=self.n_extra,
@@ -509,9 +585,9 @@ class fullModel(EPEModel, nn.Module):
         return self.mdn(x, y)
     
 
+print('initialising full model ...')
 
-    model = fullModel(n_extra=4, n_params=3, n_components=4)
-
+model = fullModel(n_extra=4, n_params=3, n_components=4)
 wfull = model.init(model_key, {"A":{"summaries": jnp.ones((N_TOTAL_SUMMARIES)),
                                       "cls": jnp.ones((10,2,4,28))},
                                       "B":{"kappa": jnp.ones((512,512,8)),
@@ -520,12 +596,10 @@ wfull = model.init(model_key, {"A":{"summaries": jnp.ones((N_TOTAL_SUMMARIES)),
 
 
 
-
-
 # instatiate minimiser code
 epe_minimiser = EPE_minimiser(density_estimator=model)
 
-
+print('training compression ...')
 
 # Clip gradients at max value, and evt. apply weight decay
 transf = [optax.clip(2.0)]
@@ -534,7 +608,11 @@ optimizer = optax.chain(
     *transf,
     optax.adam(learning_rate=1e-5) # 8e-6
 )
-epochs = 800
+
+
+epochs = config["patch_net"]["epochs"]
+
+outdir = os.path.join(config["project_dir"], "patch_%s_net/"%(patch))
 
 w, losses = epe_minimiser.fit(jr.PRNGKey(2), 
                       data=None, 
@@ -544,11 +622,15 @@ w, losses = epe_minimiser.fit(jr.PRNGKey(2),
                       train_dataset=train_dataset,
                       val_dataset=test_dataset,
                       optimizer=optimizer,
-                      outdir="/data103/makinen/des_results/patch_nets/net-B-new-bigbatch-S8/",
+                      outdir=outdir,
                       #params=w,
                     )
 
 
 # save everything
+# save weights, losses, and config script to the output directory
 
+print('saving everything')
+save_obj(losses, os.path.join(outdir, "history"))
+save_obj(config, os.path.join(outdir, "config_dict")) # save config just in case
 

@@ -5,6 +5,8 @@
 # output directory --> keep Cls stuff in top level
 project_dir: /data103/makinen/des_results/full_run/
 
+summary_path:  /data103/makinen/des_results/full_run/summaries_
+
 
 theta_star: [0.3, 0.8, -1.0]   # fiducial model for centering MDNs
 
@@ -35,10 +37,13 @@ patch_net:
   n_extra : 4   # number of output summaries
   n_filters: 32 # number of cnn filters (32 is default)
   epochs: 1000
+  learning_rate: 0.00001
   n_components: 4
   n_hidden_mdn: 100
   n_layers_mdn: 1
-  
+  w_filename: w_patch_
+
+
 
 
 # MDN network parameters
@@ -49,10 +54,11 @@ act_mdn: relu
 
 
 # SUMMARY STATISTIC DIMENSIONS
-n_summaries_cls: 4    # default 10
+n_summaries_cls: 10    # default 10
 n_summaries_A: 4
 n_summaries_B: 4
 n_summaries_C: 4
+
 
 
 
