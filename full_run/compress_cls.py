@@ -64,8 +64,6 @@ slice_cls = lambda d: slice_cls(d, cut_idx=cut_idx)
 slice_cls_single = lambda d: slice_cls_single(d, cut_idx=cut_idx)
 
 
-print(params_train[:, 2].min())
-
 
 def slice_cls(cls, cut_idx=config["cls"]["cut_idx"]):
     cls = (cls - mean_cl) / std_cl
@@ -145,41 +143,40 @@ class ClsModel(EPEModel, nn.Module):
         return self.mdn(x, theta)
     
 
-#if __name__ == "main":
-#
+if __name__ == "__main__":
 
 
-print("training network ...")
-print("\n extracting %d summaries"%(config["n_summaries_cls"]))
+    print("training network ...")
+    print("\n extracting %d summaries"%(config["n_summaries"]["cls"]))
 
-key = jr.PRNGKey(4)
-cls_single_shape = (10, 2, 4, 28,)
-
-
-model = ClsModel(n_summaries=int(config["n_summaries_cls"]),)
-                #n_hidden_mdn=config["cls"]["n_hidden_mdn"])
-
-w = model.init(key, cls_train[0], jnp.ones(3,), method=model.log_prob)
+    key = jr.PRNGKey(4)
+    cls_single_shape = (10, 2, 4, 28,)
 
 
+    model = ClsModel(n_summaries=int(config["n_summaries"]["cls"]),)
+                    #n_hidden_mdn=config["cls"]["n_hidden_mdn"])
+
+    w = model.init(key, cls_train[0], jnp.ones(3,), method=model.log_prob)
 
 
 
-w, losses = run_training_loop(model, key, (cls_train, params_train),
-                                    (cls_test, params_test), 
-                                        learning_rate=1e-5,
-                                        schedule=True,
-                                        epochs=config["cls"]["epochs"],
-                                        batch_size=128)
 
 
-print("saving everything")
+    w, losses = run_training_loop(model, key, (cls_train, params_train),
+                                        (cls_test, params_test), 
+                                            learning_rate=1e-5,
+                                            schedule=True,
+                                            epochs=config["cls"]["epochs"],
+                                            batch_size=128)
 
-# save weights, losses, and config script to the output directory
-outdir = os.path.join(config["project_dir"],  config["cls"]["net_dir"])
-Path(outdir).mkdir(parents=True, exist_ok=True)
 
-# save it all
-save_obj(w, os.path.join(outdir, config["cls"]["w_filename"].split(".pkl")[0]))
-save_obj(losses, os.path.join(outdir, "history"))
-save_obj(config, os.path.join(outdir, "config_dict")) # save config just in case
+    print("saving everything")
+
+    # save weights, losses, and config script to the output directory
+    outdir = os.path.join(config["project_dir"],  config["cls"]["net_dir"])
+    Path(outdir).mkdir(parents=True, exist_ok=True)
+
+    # save it all
+    save_obj(w, os.path.join(outdir, config["cls"]["w_filename"].split(".pkl")[0]))
+    save_obj(losses, os.path.join(outdir, "history"))
+    save_obj(config, os.path.join(outdir, "config_dict")) # save config just in case

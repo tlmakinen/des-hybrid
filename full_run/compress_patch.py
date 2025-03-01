@@ -20,9 +20,6 @@ def load_config(config_path):
         config = yaml.safe_load(file)
     return config
 
-# load config file from command line
-config = load_config(sys.argv[1])
-
 # hack to ensure we can see all the utils code
 sys.path.append(config["network_code_dir"])
 
@@ -31,8 +28,6 @@ from network.new_epe_code import *
 
 
 
-# ---- config stuff
-patch = sys.argv[2]   # should probably arg to call
 
 base_path = "/data103/makinen/des_sims/Gower_street_SBI_tfrecords/"
 use_noise_realisations =['0','1','2','3','10', '11', '12']#,'11','12','13','14','15']
@@ -201,232 +196,114 @@ def parse_serialized_file(cereal_yum, scale_params=True, filter_w=True):
 # ----------------------------------------------------------------------------
 
 
-with tf.device("CPU"):
 
-    # could these move to config file ?
-    sel_params = ["om","S8","w"]
-    cl_modes = ["1_1","1_2","1_3","1_4","2_2","2_3","2_4","3_3","3_4", "4_4"]
-
-
-
-    BATCH_SIZE = 128
-    EPOCHS = 1000 # max epochs
-    n_readers=1
-
-
-    # smarter way to collect files ?
-    train_files, test_files, lfi_files, test_sys_files = return_train_test_lists('{}'.format("A"))
-    train_files_B, test_files_B, lfi_files_B, test_sys_files_B = return_train_test_lists('{}'.format("B"))
-
-    # check to see if files are mismatched
-    for i,t in enumerate(train_files):
-        if t[55:] == train_files_B[i][55:]:
-            pass
-        else:
-            print("alert ! file mismatch")
-
-    SHUFFLE_BUFFER_SIZE = 100
+# ----- dataset code -----
+# ----------------------------------------------------------------------------
+def get_tfdataset(files, 
+                        batch_size=64, 
+                        epochs=1000,
+                        scale_params=True, 
+                        param_idx=None,
+                        to_numpy=True,
+                        shuffle=True,
+                        shuffle_buffer_size=100,
+                        drop_remainder=True):
     
-    #train_files, test_files, lfi_files, test_sys_files = return_train_test_lists('{}'.format(patch))
-    num_train_files = len(train_files)
-    num_test_files = len(test_files)
-    num_lfi_files = len(lfi_files)
-    num_sys_files = len(test_sys_files)
+    num_files = len(files)
+    print("num files: ", num_files)
+    tfdataset = tf.data.Dataset.from_tensor_slices(files)
 
-    print("train files: ", num_train_files, "test files: ", num_test_files, "lfi files: ", num_lfi_files, "test sys files: ", num_sys_files,)
+    if param_idx is not None:
+        print("retrieving parameter %d"%(param_idx))
+    
+    tfdataset = tfdataset.interleave(
+        tf.data.TFRecordDataset,
+        cycle_length=n_readers,
+        block_length=1,
+        num_parallel_calls=tf.data.AUTOTUNE,
+        deterministic=True,
+    )
+
+    tfdataset = tfdataset.map(
+        lambda serialized_example: parse_serialized_file(
+            serialized_example,
+            scale_params=scale_params    
+        ),
+        num_parallel_calls=tf.data.AUTOTUNE,
+    )
+    # control shuffle to keep interleaved datasets matched up
+    if shuffle:
+        tfdataset = tfdataset.shuffle(shuffle_buffer_size)
+
+    
+    tfdataset = tfdataset.map(lambda maps,vals,cls: \
+                                gaussian_noise_augmentation(maps,vals,cls,param_idx=param_idx),\
+                                num_parallel_calls=tf.data.AUTOTUNE)
+
+    if to_numpy:
+        tfdataset = tfdataset.as_numpy_iterator()
+        tfdataset.num_batch_per_epoch = num_files // batch_size
+        tfdataset.num_samples = (num_files // batch_size) * batch_size
 
 
-    # ----- dataset code -----
-    # ----------------------------------------------------------------------------
-    def get_tfdataset(files, 
-                          batch_size=64, 
-                          epochs=1000,
-                          scale_params=True, 
-                          param_idx=None,
-                          to_numpy=True,
-                          shuffle=True,
-                          shuffle_buffer_size=100,
-                          drop_remainder=True):
-        
-        num_files = len(files)
-        print("num files: ", num_files)
-        tfdataset = tf.data.Dataset.from_tensor_slices(files)
-    
-        if param_idx is not None:
-            print("retrieving parameter %d"%(param_idx))
-        
-        tfdataset = tfdataset.interleave(
-            tf.data.TFRecordDataset,
-            cycle_length=n_readers,
-            block_length=1,
-            num_parallel_calls=tf.data.AUTOTUNE,
-            deterministic=True,
-        )
-    
-        tfdataset = tfdataset.map(
-            lambda serialized_example: parse_serialized_file(
-                serialized_example,
-                scale_params=scale_params    
-            ),
-            num_parallel_calls=tf.data.AUTOTUNE,
-        )
-        # control shuffle to keep interleaved datasets matched up
-        if shuffle:
-            tfdataset = tfdataset.shuffle(shuffle_buffer_size)
+    return tfdataset
 
-        
-        tfdataset = tfdataset.map(lambda maps,vals,cls: \
-                                  gaussian_noise_augmentation(maps,vals,cls,param_idx=param_idx),\
-                                  num_parallel_calls=tf.data.AUTOTUNE)
 
-        if to_numpy:
-            tfdataset = tfdataset.as_numpy_iterator()
-            tfdataset.num_batch_per_epoch = num_files // batch_size
-            tfdataset.num_samples = (num_files // batch_size) * batch_size
-    
-    
-        return tfdataset
-    
-    
-    
-    def consolidate_dsets(A,B):
-        # check that cosmo params are the same    
-        return {"y": {"A": {"summaries": A[0], 
-                            "theta_A": A[1]
-                            },
-                "B": {"kappa": B["y"]["kappa"], 
-                    "cls": B["y"]["cls"]},
-                },
-            "theta":B["theta"],  
-                }
-    
 
-    # LOAD IN SUMMARIES FROM PATCH A, ORDERED ACCORDINGLY
-    def stack_tfdatasets(summaries_A, params_A,
-                         files_B,
-                         epochs=1000,
-                          batch_size=64, scale_params=True, to_numpy=True, shuffle=True,
-                         shuffle_buffer_size=100, drop_remainder=True):
+def consolidate_dsets(A,B):
+    # check that cosmo params are the same    
+    return {"y": {"A": {"summaries": A[0], 
+                        "theta_A": A[1]
+                        },
+            "B": {"kappa": B["y"]["kappa"], 
+                "cls": B["y"]["cls"]},
+            },
+        "theta":B["theta"],  
+            }
+
+
+# LOAD IN SUMMARIES FROM PATCH A, ORDERED ACCORDINGLY
+def stack_tfdatasets(summaries_A, params_A,
+                        files_B,
+                        epochs=1000,
+                        batch_size=64, scale_params=True, to_numpy=True, shuffle=True,
+                        shuffle_buffer_size=100, drop_remainder=True):
+
+    num_files_A = len(summaries_A)
+    num_files_B = len(files_B)
+    # if num_files_A != num_files_B:
+    #     raise Exception("number of files for patch A (%d) doesn't \n \
+    #                             match number of files for patch B (%d)"%(num_files_A, num_files_B))
     
-        num_files_A = len(summaries_A)
-        num_files_B = len(files_B)
-        # if num_files_A != num_files_B:
-        #     raise Exception("number of files for patch A (%d) doesn't \n \
-        #                             match number of files for patch B (%d)"%(num_files_A, num_files_B))
-        
-        tfdataset_A = tf.data.Dataset.from_tensor_slices((summaries_A, params_A)) # we probably don't need the params here
-        tfdataset_B = get_tfdataset(files_B, batch_size=batch_size, scale_params=scale_params, 
-                                    to_numpy=False, shuffle=False, 
-                                    shuffle_buffer_size=shuffle_buffer_size, 
-                                    drop_remainder=drop_remainder)
+    tfdataset_A = tf.data.Dataset.from_tensor_slices((summaries_A, params_A)) # we probably don't need the params here
+    tfdataset_B = get_tfdataset(files_B, batch_size=batch_size, scale_params=scale_params, 
+                                to_numpy=False, shuffle=False, 
+                                shuffle_buffer_size=shuffle_buffer_size, 
+                                drop_remainder=drop_remainder)
+
+    # just zip two datasets
+    tfdataset =  tf.data.Dataset.zip((tfdataset_A,tfdataset_B))
+    # now map the dictionary function to get in the right format for mdn
+    tfdataset = tfdataset.map(lambda A,B: consolidate_dsets(A,B), num_parallel_calls=tf.data.AUTOTUNE,) 
     
-        # just zip two datasets
-        tfdataset =  tf.data.Dataset.zip((tfdataset_A,tfdataset_B))
-        # now map the dictionary function to get in the right format for mdn
-        tfdataset = tfdataset.map(lambda A,B: consolidate_dsets(A,B), num_parallel_calls=tf.data.AUTOTUNE,) 
-        
-        # THEN shuffle
-        if shuffle:
-            tfdataset = tfdataset.shuffle(shuffle_buffer_size)
-        # batch here
-        tfdataset = tfdataset.batch(batch_size, drop_remainder=drop_remainder) #.prefetch(tf.data.AUTOTUNE) 
-        # repeat dataset
-        tfdataset = tfdataset.repeat(epochs)
-    
-        if to_numpy:
-            tfdataset = tfdataset.as_numpy_iterator()
-            tfdataset.num_batch_per_epoch = num_files_A // batch_size
-            tfdataset.num_samples = (num_files_A // batch_size) * batch_size
-    
-        return tfdataset
+    # THEN shuffle
+    if shuffle:
+        tfdataset = tfdataset.shuffle(shuffle_buffer_size)
+    # batch here
+    tfdataset = tfdataset.batch(batch_size, drop_remainder=drop_remainder) #.prefetch(tf.data.AUTOTUNE) 
+    # repeat dataset
+    tfdataset = tfdataset.repeat(epochs)
+
+    if to_numpy:
+        tfdataset = tfdataset.as_numpy_iterator()
+        tfdataset.num_batch_per_epoch = num_files_A // batch_size
+        tfdataset.num_samples = (num_files_A // batch_size) * batch_size
+
+    return tfdataset
     
     # ----------------------------------------------------------------------------
 
-    # ----- dataset code -----
-    print("beginning compression for patch %s")
 
-
-
-    print("collecting datasets ...")
-
-    # ARGPARSE STUFF ?
-    create_new_summary_file = bool(int(sys.argv[3]))
-
-
-
-
-    # create empty summaries dataset if we're just dealing with patch A
-    
-    # summaries code
-    # SOME IMPORTANT HYPERPARAMS --> FROM CONFIG
-    N_PARAMS = config["n_params"]
-
-    N_SUMMARIES_CLS = config["n_summaries_cls"]    # default 10
-    N_SUMMARIES_A =   config["n_summaries_A"]
-    N_SUMMARIES_B =   config["n_summaries_B"]
-    N_SUMMARIES_C =   config["n_summaries_C"]
-
-    N_TOTAL_SUMMARIES = N_SUMMARIES_CLS + N_SUMMARIES_A + N_SUMMARIES_B + N_SUMMARIES_C
-    
-    if patch == "A":
-        N_EXISTING = N_SUMMARIES_CLS
-    elif patch == "B":
-        N_EXISTING = N_SUMMARIES_CLS + N_SUMMARIES_A
-    else:
-        N_EXISTING =  N_SUMMARIES_CLS + N_SUMMARIES_A + N_SUMMARIES_B 
-
-    print("learning %d new summaries for patch compression"%(N_TOTAL_SUMMARIES - N_EXISTING))
-
-
-
-    if create_new_summary_file:
-        print("creating dummy summary file")
-        summaries_A_file = dict(
-            summaries_lfi=np.zeros((len(lfi_files), N_TOTAL_SUMMARIES)),
-            params_lfi=np.zeros((len(lfi_files), N_PARAMS)),
-            summaries_test=np.zeros((len(test_files), N_TOTAL_SUMMARIES)),
-            params_test=np.zeros((len(test_files), N_PARAMS)),
-            summaries_sys=np.zeros((len(test_sys_files), N_TOTAL_SUMMARIES)),
-            params_sys=np.zeros((len(test_sys_files), N_PARAMS)),
-            summaries_train=np.zeros((len(train_files), N_TOTAL_SUMMARIES)),
-            params_train=np.zeros((len(train_files), N_PARAMS))
-            )
-
-    else:
-        summary_file_path = config["summary_path"] + "patch_%s"%(patch) + ".npz"
-        print("loading existing summary file from %s"%(summary_file_path))
-        summaries_A_file = np.load(summary_file_path)
-
-    
-
-    
-    
-    summaries_A_file = np.load("/data103/makinen/des_results/patch_nets/summaries_new_patchA_S8.npz")
-
-    # train, test validation datasets
-    train_dataset = stack_tfdatasets(summaries_A_file["summaries_train"], summaries_A_file["params_train"],
-                                        train_files_B, batch_size=BATCH_SIZE, scale_params=True, to_numpy=True)
-    
-    test_dataset = stack_tfdatasets(summaries_A_file["summaries_test"], summaries_A_file["params_test"],
-                test_files_B, batch_size=BATCH_SIZE, scale_params=True, to_numpy=True, drop_remainder=False)
-
-    
-    lfi_dataset = stack_tfdatasets(summaries_A_file["summaries_lfi"], summaries_A_file["params_lfi"],
-                lfi_files_B, batch_size=BATCH_SIZE, scale_params=False, to_numpy=True, epochs=3)
-    
-    sys_dataset = stack_tfdatasets(summaries_A_file["summaries_sys"], summaries_A_file["params_sys"],
-                test_sys_files_B, batch_size=BATCH_SIZE, scale_params=False, to_numpy=True, epochs=3)
-    
-
-
-    # check to see that parameters line up along datasets
-    if not create_new_summary_file:
-        print('checking that dataset thetas line up')
-        for i in range(2):
-            data = next(iter(test_dataset))
-            match = (data['y']['A']['theta_A'] == data['theta'])[0][0]
-
-        assert not match, "datasets are not lined up !"
     
 
 
@@ -441,7 +318,7 @@ slice_cls = lambda d: slice_cls(d, cut_idx=cut_idx)
 slice_cls_single = lambda d: slice_cls_single(d, cut_idx=cut_idx)
 
 key = jax.random.PRNGKey(0) # pseudo-random key for Jax network.
-cls_model = ClsModel(n_summaries=config["n_summaries_cls"])
+cls_model = ClsModel(n_summaries=config["n_summaries"]["cls"])
 
 cls_single_shape = (10, 2, 4, 28,)
 clsdir = os.path.join(config["project_dir"],  config["cls"]["net_dir"])
@@ -455,15 +332,17 @@ cls_compression = lambda d: cls_model.apply(w_cls_compress, d, method=cls_model.
 
 
 
+# ----------------------------------------------------------------------------
 
 class simplePatchCNN(nn.Module):
     """CNN to extract extra information from WL field"""
     filters: Sequence[int]
     cls_compression: Callable
-    n_extra: int = 4
-    n_summaries_cls: int = N_SUMMARIES_CLS
-    n_existing: int = N_EXISTING
-    n_total: int = N_TOTAL_SUMMARIES
+    n_extra: int 
+    n_summaries_cls: int
+    n_existing: int
+    n_total: int
+    summary_idxs: tuple
     act_cnn: Callable = nn.relu
     act_dense: Callable = smooth_leaky
     dtype: Any = jnp.float32
@@ -477,7 +356,8 @@ class simplePatchCNN(nn.Module):
 
         # RIGHT SO HERE WE HAVE EXISTING CLS NUMBERS AND OLD SUMMARIES
         # TAKE THE PATCH A SUMMARIES AND VARY THE CLS COMPRESSION UNDER NOISE
-        existing_info = inputs["A"]["summaries"][N_SUMMARIES_CLS:]
+        existing_info = inputs["A"]["summaries"] #[:self.n_existing] # take everyting and then we'll write over with Cls
+        # print("existing info", existing_info.shape)
 
         # pass the cls through the network again to increase variation in the optimisation
         cls_summs = self.cls_compression(inputs["B"]["cls"])
@@ -517,120 +397,284 @@ class simplePatchCNN(nn.Module):
         #x = jnp.concatenate([cls_summs, existing_info.reshape(-1), x])
 
         # set all existing information in its right place
-        outputs = jnp.zeros((self.n_total,))
+        # | Cls |     a|      b|     c|
+
+        # stop1 = self.n_summaries_cls + self.n_existing
+        #print("x", x.shape)
+        #print("existing info", existing_info.shape)
+
+        #outputs = jnp.zeros((self.n_total,))
+        outputs = jnp.array(existing_info)
+        # first existing information goes in (including old Cls information)
+       # outputs = outputs.at[: self.n_existing].set(existing_info.reshape(-1))
+        #print("outputs exist", outputs)
+        # then Cls information from network application
         outputs = outputs.at[:self.n_summaries_cls].set(cls_summs)
-        outputs = outputs.at[self.n_summaries_cls:self.n_existing].set(existing_info.reshape(-1))
-        outputs = outputs.at[self.n_existing:self.n_existing + self.n_extra].set(x)
+        # then new information
+        outputs = outputs.at[self.summary_idxs[0]:self.summary_idxs[1]].set(x)
 
         return outputs
 
 
-# MODEL --> from config
-print("testing network initialisation ...")
-
-model_key = jr.PRNGKey(int(config["model_key"]))
-
-patch_net = simplePatchCNN(
-                filters=32,
-                act_cnn=nn.relu,
-                act_dense=smooth_leaky,
-                cls_compression=cls_compression,
-                n_extra=4,
-                n_existing=N_EXISTING,
-                dtype=jnp.float32,
-)
+# ----------------------------------------------------------------------------
 
 
-wembed = patch_net.init(model_key, {"A":{"summaries": jnp.ones((N_TOTAL_SUMMARIES)),
-                                      "cls": jnp.ones((10,2,4,28))},
-                                      "B":{"kappa": jnp.ones((512,512,8)),
-                                      "cls": jnp.ones((10,2,4,28))}
-                                     })
-data = next(iter(train_dataset))
-appl = lambda d: patch_net.apply(wembed, d)
-outs = jax.vmap(appl)(data['y'])
-print("output shape: ", outs.shape)
+if __name__ == "__main__":
+
+    # load config file from command line
+    config = load_config(sys.argv[1])
+
+    # ---- config stuff
+    patch = sys.argv[2]   # should probably arg to call
+    print("beginning compression for patch %s"%(patch))
+
+    with tf.device("CPU"):
+        # could these move to config file ?
+        sel_params = ["om","S8","w"]
+        cl_modes = ["1_1","1_2","1_3","1_4","2_2","2_3","2_4","3_3","3_4", "4_4"]
 
 
-class fullModel(EPEModel, nn.Module):
-    n_extra: int
-    n_params: int = 3
-    n_components: int = 4
+        BATCH_SIZE = 128
+        EPOCHS = 1000 # max epochs
+        n_readers=1
 
-    def setup(self):
-        self.mdn = MDN(
-                        hidden_channels=[100],
-                        n_components=self.n_components,
-                        n_dimension=self.n_params,
-                        act=nn.relu)
+
+        # smarter way to collect files ?
+        train_files, test_files, lfi_files, test_sys_files = return_train_test_lists('{}'.format("A"))
+        train_files_B, test_files_B, lfi_files_B, test_sys_files_B = return_train_test_lists('{}'.format("B"))
+
+        # check to see if files are mismatched
+        for i,t in enumerate(train_files):
+            if t[55:] == train_files_B[i][55:]:
+                pass
+            else:
+                print("alert ! file mismatch")
+
+        SHUFFLE_BUFFER_SIZE = 100
         
-        self.embeding_net = simplePatchCNN(
-                        filters=32,
-                        cls_compression=cls_compression,
-                        n_existing=N_EXISTING,
-                        act_cnn=nn.relu,
-                        act_dense=smooth_leaky,
-                        n_extra=self.n_extra,
-                        dtype=jnp.float32)
+        #train_files, test_files, lfi_files, test_sys_files = return_train_test_lists('{}'.format(patch))
+        num_train_files = len(train_files)
+        num_test_files = len(test_files)
+        num_lfi_files = len(lfi_files)
+        num_sys_files = len(test_sys_files)
 
-    def get_embed(self, x):
-        return self.embeding_net(x)
+        print("train files: ", num_train_files, "test files: ", num_test_files, "lfi files: ", num_lfi_files, "test sys files: ", num_sys_files,)
 
-    def log_prob(self, x, y):
-        x = self.embeding_net(x)
-        return self.mdn(x, y) 
+
+        # ----- dataset code -----
+
+        print("collecting datasets ...")
+
+        # ARGPARSE STUFF ?
+        create_new_summary_file = bool(int(sys.argv[3]))
+
+        # create empty summaries dataset if we're just dealing with patch A
+        
+        # summaries code
+        # SOME IMPORTANT HYPERPARAMS --> FROM CONFIG
+        N_PARAMS = config["n_params"]
+
+        N_SUMMARIES_CLS = config["n_summaries"]["cls"]    # default 10
+        N_SUMMARIES_A =   config["n_summaries"]["A"]
+        N_SUMMARIES_B =   config["n_summaries"]["B"]
+        N_SUMMARIES_C =   config["n_summaries"]["C"]
+
+        N_TOTAL_SUMMARIES = N_SUMMARIES_CLS + N_SUMMARIES_A + N_SUMMARIES_B + N_SUMMARIES_C
+
+        print("total summaries", N_TOTAL_SUMMARIES)
+
+        idxs_A =  ((N_SUMMARIES_CLS), (N_SUMMARIES_CLS + N_SUMMARIES_A))
+        idxs_B = ((N_SUMMARIES_CLS + N_SUMMARIES_A), (N_SUMMARIES_CLS + N_SUMMARIES_A + N_SUMMARIES_B))
+        idxs_C = ((N_SUMMARIES_CLS + N_SUMMARIES_A + N_SUMMARIES_B), (N_SUMMARIES_CLS + N_SUMMARIES_A + N_SUMMARIES_B + N_SUMMARIES_C))
+        
+        if patch == "A":
+            N_EXISTING = N_SUMMARIES_CLS
+            idxs = idxs_A
+
+        elif patch == "B":
+            N_EXISTING = N_SUMMARIES_CLS + N_SUMMARIES_A
+            idxs = idxs_B
+        else:
+            N_EXISTING =  N_SUMMARIES_CLS + N_SUMMARIES_A + N_SUMMARIES_B 
+            idxs = idxs_C
+
+
+        
+        print("idxs", idxs)
+
+        if create_new_summary_file:
+            print("creating dummy summary file")
+            summaries_A_file = dict(
+                summaries_lfi=np.zeros((len(lfi_files), N_TOTAL_SUMMARIES)),
+                params_lfi=np.zeros((len(lfi_files), N_PARAMS)),
+                summaries_test=np.zeros((len(test_files), N_TOTAL_SUMMARIES)),
+                params_test=np.zeros((len(test_files), N_PARAMS)),
+                summaries_sys=np.zeros((len(test_sys_files), N_TOTAL_SUMMARIES)),
+                params_sys=np.zeros((len(test_sys_files), N_PARAMS)),
+                summaries_train=np.zeros((len(train_files), N_TOTAL_SUMMARIES)),
+                params_train=np.zeros((len(train_files), N_PARAMS))
+                )
+
+        else:
+            summary_file_path = config["summary_path"] + "patch_%s"%(patch) + ".npz"
+            print("loading existing summary file from %s"%(summary_file_path))
+            summaries_A_file = np.load(summary_file_path)
+
     
-    def __call__(self, x, y):
-        x = self.embeding_net(x)
-        return self.mdn(x, y)
+
+        #summaries_A_file = np.load("/data103/makinen/des_results/patch_nets/summaries_new_patchA_S8.npz")
+
+        # train, test validation datasets
+        train_dataset = stack_tfdatasets(summaries_A_file["summaries_train"], summaries_A_file["params_train"],
+                                            train_files_B, batch_size=BATCH_SIZE, scale_params=True, to_numpy=True)
+        
+        test_dataset = stack_tfdatasets(summaries_A_file["summaries_test"], summaries_A_file["params_test"],
+                    test_files_B, batch_size=BATCH_SIZE, scale_params=True, to_numpy=True, drop_remainder=False)
+
+        
+        lfi_dataset = stack_tfdatasets(summaries_A_file["summaries_lfi"], summaries_A_file["params_lfi"],
+                    lfi_files_B, batch_size=BATCH_SIZE, scale_params=False, to_numpy=True, epochs=3)
+        
+        sys_dataset = stack_tfdatasets(summaries_A_file["summaries_sys"], summaries_A_file["params_sys"],
+                    test_sys_files_B, batch_size=BATCH_SIZE, scale_params=False, to_numpy=True, epochs=3)
+        
+
+        # check to see that parameters line up along datasets
+        if not create_new_summary_file:
+            print('checking that dataset thetas line up')
+            for i in range(2):
+                data = next(iter(test_dataset))
+                match = (data['y']['A']['theta_A'] == data['theta'])[0][0]
+
+            assert not match, "datasets are not lined up !"
+
     
+    # ----------------------------------------------------------------------------
 
-print('initialising full model ...')
+    # MODEL --> from config
+    print("testing network initialisation ...")
 
-model = fullModel(n_extra=4, n_params=3, n_components=4)
-wfull = model.init(model_key, {"A":{"summaries": jnp.ones((N_TOTAL_SUMMARIES)),
-                                      "cls": jnp.ones((10,2,4,28))},
-                                      "B":{"kappa": jnp.ones((512,512,8)),
-                                      "cls": jnp.ones((10,2,4,28))}
-                                     }, jnp.ones(3))
+    model_key = jr.PRNGKey(int(config["model_key"]))
 
-
-
-# instatiate minimiser code
-epe_minimiser = EPE_minimiser(density_estimator=model)
-
-print('training compression ...')
-
-# Clip gradients at max value, and evt. apply weight decay
-transf = [optax.clip(2.0)]
-# transf.append(optax.add_decayed_weights(1e-4))
-optimizer = optax.chain(
-    *transf,
-    optax.adam(learning_rate=1e-5) # 8e-6
-)
+    patch_net = simplePatchCNN(
+                    filters=32,
+                    act_cnn=nn.relu,
+                    act_dense=smooth_leaky,
+                    cls_compression=cls_compression,
+                    n_extra=4,
+                    n_existing=N_EXISTING,
+                    n_summaries_cls=N_SUMMARIES_CLS,
+                    n_total=N_TOTAL_SUMMARIES,
+                    summary_idxs = idxs,
+                    dtype=jnp.float32,
+    )
 
 
-epochs = config["patch_net"]["epochs"]
+    wembed = patch_net.init(model_key, {"A":{"summaries": jnp.ones((N_TOTAL_SUMMARIES)),
+                                        "cls": jnp.ones((10,2,4,28))},
+                                        "B":{"kappa": jnp.ones((512,512,8)),
+                                        "cls": jnp.ones((10,2,4,28))}
+                                        })
+    data = next(iter(train_dataset))
+    #print(data['y']['A']['summaries'].shape)
+    appl = lambda d: patch_net.apply(wembed, d)
+    outs = jax.vmap(appl)(data['y'])
+    print("output shape: ", outs.shape)
+    print("example outs: ", outs[0])
 
-outdir = os.path.join(config["project_dir"], "patch_%s_net/"%(patch))
+    # FULL MODEL CLASS WITH MDN BITS
+    
+    class fullModel(EPEModel, nn.Module):
+        n_extra: int
+        n_params: int = 3
+        n_components: int = 4
 
-w, losses = epe_minimiser.fit(jr.PRNGKey(2), 
-                      data=None, 
-                      batch_size=128,
-                      n_iter=epochs,
-                      n_early_stopping_patience=20,  #20
-                      train_dataset=train_dataset,
-                      val_dataset=test_dataset,
-                      optimizer=optimizer,
-                      outdir=outdir,
-                      #params=w,
-                    )
+        def setup(self):
+            self.mdn = MDN(
+                            hidden_channels=[100],
+                            n_components=self.n_components,
+                            n_dimension=self.n_params,
+                            act=nn.relu)
+            
+            self.embeding_net = simplePatchCNN(
+                    filters=32,
+                    act_cnn=nn.relu,
+                    act_dense=smooth_leaky,
+                    cls_compression=cls_compression,
+                    n_extra=4,
+                    n_existing=N_EXISTING,
+                    n_summaries_cls=N_SUMMARIES_CLS,
+                    n_total=N_TOTAL_SUMMARIES,
+                    summary_idxs = idxs,
+                    dtype=jnp.float32,
+        )
+
+        def get_embed(self, x):
+            return self.embeding_net(x)
+
+        def log_prob(self, x, y):
+            x = self.embeding_net(x)
+            return self.mdn(x, y) 
+        
+        def __call__(self, x, y):
+            x = self.embeding_net(x)
+            return self.mdn(x, y)
+
+        
+
+    print('initialising full model ...')
+
+    model = fullModel(n_extra=config["n_summaries"][patch], 
+                      n_params=config["n_params"], 
+                      n_components=config['patch_net']['n_components'])
+
+    wfull = model.init(model_key, {"A":{"summaries": jnp.ones((N_TOTAL_SUMMARIES)),
+                                        "cls": jnp.ones((10,2,4,28))},
+                                        "B":{"kappa": jnp.ones((512,512,8)),
+                                        "cls": jnp.ones((10,2,4,28))}
+                                        }, jnp.ones(3))
 
 
-# save everything
-# save weights, losses, and config script to the output directory
+    # instatiate minimiser code
+    epe_minimiser = EPE_minimiser(density_estimator=model)
 
-print('saving everything')
-save_obj(losses, os.path.join(outdir, "history"))
-save_obj(config, os.path.join(outdir, "config_dict")) # save config just in case
+    print('training compression ...')
 
+    # Clip gradients at max value, and evt. apply weight decay
+    transf = [optax.clip(2.0)]
+    # transf.append(optax.add_decayed_weights(1e-4))
+    optimizer = optax.chain(
+        *transf,
+        optax.adam(learning_rate=1e-5) # 8e-6
+    )
+
+
+    epochs = config["patch_net"]["epochs"]
+    patience = config["patch_net"]["patience"]
+
+    outdir = os.path.join(config["project_dir"], "patch_%s_net_%s/"%(patch, config["run_name"]))
+    print("saving network weights and results to: ", outdir)
+
+    w, losses = epe_minimiser.fit(jr.PRNGKey(2), 
+                        data=None, 
+                        batch_size=128,
+                        n_iter=epochs,
+                        n_early_stopping_patience=patience,  #20
+                        train_dataset=train_dataset,
+                        val_dataset=test_dataset,
+                        optimizer=optimizer,
+                        outdir=outdir,
+                        #params=w,
+                        )
+
+
+    # save everything
+    # save weights, losses, and config script to the output directory
+
+    print('saving everything')
+    save_obj(losses, os.path.join(outdir, "history"))
+    save_obj(config, os.path.join(outdir, "config_dict")) # save config just in case
+
+
+
+    # get all the summaries
