@@ -9,7 +9,12 @@ from tensorflow_probability.substrates.jax import distributions as tfd
 
 import matplotlib.pyplot as plt
 import numpy as np
+from typing import Sequence, Any, Callable
 
+import numpy as np
+import flax.linen as nn
+import matplotlib.pyplot as plt
+import cloudpickle as pickle
 
 import tensorflow as tf
 import tensorflow_datasets as tfds
@@ -20,8 +25,9 @@ def load_config(config_path):
         config = yaml.safe_load(file)
     return config
 
+
 # hack to ensure we can see all the utils code
-sys.path.append(config["network_code_dir"])
+sys.path.append("/home/makinen/repositories/des-hybrid/")
 
 from training_loop import *
 from network.new_epe_code import *
@@ -31,36 +37,14 @@ from network.new_epe_code import *
 
 base_path = "/data103/makinen/des_sims/Gower_street_SBI_tfrecords/"
 use_noise_realisations =['0','1','2','3','10', '11', '12']#,'11','12','13','14','15']
-cls_stats_file = jnp.load(config["cls"]["cls_normalisation_stats_filename"])
-S2_cls=cls_stats_file["S2_cls"]
-mean_cl=cls_stats_file["mean_cl"]
-std_cl=cls_stats_file["std_cl"]
-cut_idx=cls_stats_file["cut_idx"]
+
+sel_params = ["om","S8","w"]
+cl_modes = ["1_1","1_2","1_3","1_4","2_2","2_3","2_4","3_3","3_4", "4_4"]
+
 
 # ----- config stuff
 
 # ----------------------------------------------------------------------------
-def gaussian_noise_augmentation(x, y, cls, param_idx=None):
-    x += tf.random.normal(
-                        shape = [512, 512,8],
-                        mean = 0,
-                        stddev = 1e-3,
-                        dtype = tf.float32
-                        ) #Mask option?
-
-    # add noise to cls
-    cls += tf.random.normal(
-                shape = [10, 2, 4, 28],
-                mean = 0, 
-                stddev =std_cl*1e-3,
-                dtype = tf.float32
-                )
-
-    if param_idx is not None:
-        y = tf.expand_dims(y[param_idx], 0)
-
-    # data is now a dictionary
-    return {"y": {"kappa": x, "cls": cls}, "theta": y}
 
 
 
@@ -207,8 +191,8 @@ def get_tfdataset(files,
                         to_numpy=True,
                         shuffle=True,
                         shuffle_buffer_size=100,
+                        n_readers=1,
                         drop_remainder=True):
-    
     num_files = len(files)
     print("num files: ", num_files)
     tfdataset = tf.data.Dataset.from_tensor_slices(files)
@@ -307,29 +291,6 @@ def stack_tfdatasets(summaries_A, params_A,
     
 
 
-# ----------------------------------------------------------------------------
-
-from compress_cls import *
-# these should have been imported from the Cls script
-
-print("loading Cls network ...")
-
-slice_cls = lambda d: slice_cls(d, cut_idx=cut_idx)
-slice_cls_single = lambda d: slice_cls_single(d, cut_idx=cut_idx)
-
-key = jax.random.PRNGKey(0) # pseudo-random key for Jax network.
-cls_model = ClsModel(n_summaries=config["n_summaries"]["cls"])
-
-cls_single_shape = (10, 2, 4, 28,)
-clsdir = os.path.join(config["project_dir"],  config["cls"]["net_dir"])
-w_cls_compress = load_obj(os.path.join(clsdir, config["cls"]["w_filename"]))
-
-cls_compression = lambda d: cls_model.apply(w_cls_compress, d, method=cls_model.get_embed)
-
-
-
-# ----------------------------------------------------------------------------
-
 
 
 # ----------------------------------------------------------------------------
@@ -421,8 +382,26 @@ class simplePatchCNN(nn.Module):
 
 if __name__ == "__main__":
 
+    from compress_cls import *
+    # these should have been imported from the Cls script
+
+
+    cls_stats_file = jnp.load(config["cls"]["cls_normalisation_stats_filename"])
+    S2_cls=cls_stats_file["S2_cls"]
+    mean_cl=cls_stats_file["mean_cl"]
+    std_cl=cls_stats_file["std_cl"]
+    cut_idx=cls_stats_file["cut_idx"]
+
+    
+
+    from training_loop import *
+    from network.new_epe_code import *
+
     # load config file from command line
     config = load_config(sys.argv[1])
+
+    # hack to ensure we can see all the utils code
+    sys.path.append(config["network_code_dir"])
 
     # ---- config stuff
     patch = sys.argv[2]   # should probably arg to call
@@ -437,6 +416,28 @@ if __name__ == "__main__":
         BATCH_SIZE = 128
         EPOCHS = 1000 # max epochs
         n_readers=1
+
+        def gaussian_noise_augmentation(x, y, cls, param_idx=None):
+            x += tf.random.normal(
+                                shape = [512, 512,8],
+                                mean = 0,
+                                stddev = 1e-3,
+                                dtype = tf.float32
+                                ) #Mask option?
+
+            # add noise to cls
+            cls += tf.random.normal(
+                        shape = [10, 2, 4, 28],
+                        mean = 0, 
+                        stddev =std_cl*1e-3,
+                        dtype = tf.float32
+                        )
+
+            if param_idx is not None:
+                y = tf.expand_dims(y[param_idx], 0)
+
+            # data is now a dictionary
+            return {"y": {"kappa": x, "cls": cls}, "theta": y}
 
 
         # smarter way to collect files ?
@@ -550,6 +551,28 @@ if __name__ == "__main__":
 
     
     # ----------------------------------------------------------------------------
+
+
+    # ----------------------------------------------------------------------------
+    # CLS STUFF
+
+    print("loading Cls network ...")
+
+    slice_cls = lambda d: slice_cls(d, cut_idx=cut_idx)
+    slice_cls_single = lambda d: slice_cls_single(d, cut_idx=cut_idx)
+
+    key = jax.random.PRNGKey(0) # pseudo-random key for Jax network.
+    cls_model = ClsModel(n_summaries=config["n_summaries"]["cls"])
+
+    cls_single_shape = (10, 2, 4, 28,)
+    clsdir = os.path.join(config["project_dir"],  config["cls"]["net_dir"])
+    w_cls_compress = load_obj(os.path.join(clsdir, config["cls"]["w_filename"]))
+
+    cls_compression = lambda d: cls_model.apply(w_cls_compress, d, method=cls_model.get_embed)
+
+
+
+# ----------------------------------------------------------------------------
 
     # MODEL --> from config
     print("testing network initialisation ...")

@@ -21,20 +21,22 @@ def load_config(config_path):
         config = yaml.safe_load(file)
     return config
 
-# load config file from command line
-config = load_config(sys.argv[1])
 
-# hack to ensure we can see all the utils code
-sys.path.append(config["network_code_dir"])
-
-from training_loop import *
-from network.new_epe_code import *
-from compress_patch import *
 
 
 
 
 if __name__ == "__main__":
+
+    # load config file from command line
+    config = load_config(sys.argv[1])
+
+    # hack to ensure we can see all the utils code
+    sys.path.append(config["network_code_dir"])
+
+    from training_loop import *
+    from network.new_epe_code import *
+    from compress_patch import *
 
 
     # load config file from command line
