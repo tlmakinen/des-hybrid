@@ -6,7 +6,7 @@
 project_dir: /data103/makinen/des_results/full_run/
 
 summary_path:  /data103/makinen/des_results/full_run/summaries_
-run_name: test
+run_name: test_lr
 
 theta_star: [0.3, 0.8, -1.0]   # fiducial model for centering MDNs
 
@@ -37,12 +37,13 @@ patch_net:
   n_extra : 4   # number of output summaries
   n_filters: 32 # number of cnn filters (32 is default)
   epochs: 1500
-  patience: 20
-  learning_rate: 0.00001
+  patience: 100
+  learning_rate: 0.0001
   batch_size: 128
   n_components: 4
   n_hidden_mdn: 100
   n_layers_mdn: 1
+  noise_amp: 0.001
   w_filename: w_patch_
 
 

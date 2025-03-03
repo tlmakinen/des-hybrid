@@ -138,6 +138,33 @@ def return_train_test_lists(patch):
                 train_file_list.append(file)
     return train_file_list, test_file_list, lfi_file_list, test_file_systematic_list
 
+
+def return_baryon_lists(patch, base_path="/data103/makinen/des_sims/baryon_tests/cosmogrid_baryons_tfrec/"):
+    files = glob.glob(base_path + "{}/".format(patch) +"shear_maps_*")
+    print(base_path + "{}/".format(patch) +"shear_maps_*")
+
+    # sort the files to match A to B to C !
+    files.sort(key=lambda x:[int(c) if c.isdigit() else c for c in re.split(r'(\d+)', x)])
+
+    
+    print(len(files))
+    train_file_list = []
+    test_file_list = []
+    lfi_file_list = []
+    test_file_systematic_list = []
+    for file in files:
+        noiserel = file.split("_rel")[0].split('noiserel')[-1]
+        if noiserel in use_noise_realisations:
+            if noiserel == '3':
+                test_file_list.append(file)
+            elif noiserel == '10':
+                lfi_file_list.append(file)
+            elif noiserel == '12':
+                test_file_systematic_list.append(file)
+            else:
+                train_file_list.append(file)
+    return train_file_list, test_file_list, lfi_file_list, test_file_systematic_list
+
 def parse_serialized_file(cereal_yum, scale_params=True, filter_w=True):
 
     features = {
@@ -190,6 +217,7 @@ def get_tfdataset(files,
                         scale_params=True, 
                         param_idx=None,
                         to_numpy=True,
+                        add_noise=True,
                         shuffle=True,
                         shuffle_buffer_size=100,
                         n_readers=1,
@@ -197,6 +225,8 @@ def get_tfdataset(files,
     num_files = len(files)
     print("num files: ", num_files)
     tfdataset = tf.data.Dataset.from_tensor_slices(files)
+    if not add_noise:
+        print("collecting dataset without default noise augmentation")
 
     if param_idx is not None:
         print("retrieving parameter %d"%(param_idx))
@@ -222,7 +252,7 @@ def get_tfdataset(files,
 
     
     tfdataset = tfdataset.map(lambda maps,vals,cls: \
-                                gaussian_noise_augmentation(maps,vals,cls,param_idx=param_idx),\
+                                gaussian_noise_augmentation(maps,vals,cls,param_idx=param_idx,add_noise=add_noise),\
                                 num_parallel_calls=tf.data.AUTOTUNE)
 
     if to_numpy:
@@ -253,6 +283,7 @@ def stack_tfdatasets(summaries_A, params_A,
                         files_B,
                         epochs=1000,
                         batch_size=64, scale_params=True, to_numpy=True, shuffle=True,
+                        add_noise=True,
                         shuffle_buffer_size=100, drop_remainder=True):
 
     num_files_A = len(summaries_A)
@@ -264,6 +295,7 @@ def stack_tfdatasets(summaries_A, params_A,
     tfdataset_A = tf.data.Dataset.from_tensor_slices((summaries_A, params_A)) # we probably don't need the params here
     tfdataset_B = get_tfdataset(files_B, batch_size=batch_size, scale_params=scale_params, 
                                 to_numpy=False, shuffle=False, 
+                                add_noise=add_noise,
                                 shuffle_buffer_size=shuffle_buffer_size, 
                                 drop_remainder=drop_remainder)
 
@@ -474,7 +506,7 @@ if __name__ == "__main__":
     #                    help="whether or not to create a new summary file; defaults to True")
     parser.add_argument('-s', '--summary_file', type=str, 
                         help="existing summary file for complementary patch training")
-    parser.add_argument('-t', '--train', type=bool, default=True, 
+    parser.add_argument('-t', '--no_train', type=bool, default=False, 
                         help="whether or not to train the network")
     parser.add_argument('-l', '--load', type=bool, default=False,
                         help="whether or not to load weights for training")
@@ -514,13 +546,15 @@ if __name__ == "__main__":
     # ---- config stuff
     patch = args.patch   
     #train = bool(args.train) # whether or not to train the network
-    train = bool(args.train)
+    train = not bool(args.no_train)
+    if not train:
+        print("proceeding with summary compression (no training)")
     load_weights = bool(args.load)
     if (args.summary_file is not None):
         create_new_summary_file = False
     else:
         create_new_summary_file = True
-    print("create new summay", create_new_summary_file)
+    print("create new summary", create_new_summary_file)
 
     if load_weights:
         print('will be loading weights')
@@ -534,21 +568,25 @@ if __name__ == "__main__":
         #epochs = config["patch_net"]["epochs"]
         n_readers=1
 
-        def gaussian_noise_augmentation(x, y, cls, param_idx=None):
-            x += tf.random.normal(
-                                shape = [512, 512,8],
-                                mean = 0,
-                                stddev = 1e-3,
-                                dtype = tf.float32
-                                ) #Mask option?
+        def gaussian_noise_augmentation(x, y, cls, param_idx=None, add_noise=True):
+            """optionally add gaussian noise for training and return data as 
+            a dictionary.
+            """
+            if add_noise:
+                x += tf.random.normal(
+                                    shape = [512, 512,8],
+                                    mean = 0,
+                                    stddev = float(config["patch_net"]["noise_amp"]),
+                                    dtype = tf.float32
+                                    ) #Mask option?
 
-            # add noise to cls
-            cls += tf.random.normal(
-                        shape = [10, 2, 4, 28],
-                        mean = 0, 
-                        stddev =std_cl*1e-3,
-                        dtype = tf.float32
-                        )
+                # add noise to cls
+                cls += tf.random.normal(
+                            shape = [10, 2, 4, 28],
+                            mean = 0, 
+                            stddev =std_cl*float(config["patch_net"]["noise_amp"]),
+                            dtype = tf.float32
+                            )
 
             if param_idx is not None:
                 y = tf.expand_dims(y[param_idx], 0)
@@ -839,8 +877,13 @@ if __name__ == "__main__":
 
 
     else:
-        print("loading network weights and results from: ", outdir)
-        w = load_obj(outdir + "best_params.pkl")
+        if args.load_dir is not None:
+            print("loading network weights and results from: ", args.load_dir)
+            w = load_obj(args.load_dir)
+
+        else:
+            print("loading network weights and results from: ", outdir)
+            w = load_obj(outdir + "best_params.pkl")
 
 
     # get all the summaries
@@ -862,20 +905,32 @@ if __name__ == "__main__":
         
         # train, test validation datasets
         train_dataset2 = stack_tfdatasets(summaries_A_file["summaries_train"], summaries_A_file["params_train"],
-                                            train_files_B, batch_size=BATCH_SIZE, scale_params=True, to_numpy=True, shuffle=False)
+                                            train_files_B, 
+                                            add_noise=True,
+                                            batch_size=BATCH_SIZE, 
+                                            scale_params=True, to_numpy=True, shuffle=False)
         
         # scale params for training (default)
         test_dataset2 = stack_tfdatasets(summaries_A_file["summaries_test"], summaries_A_file["params_test"],
-                    test_files_B, batch_size=BATCH_SIZE, scale_params=True, to_numpy=True, drop_remainder=False, shuffle=False)
+                    test_files_B, 
+                    add_noise=False,
+                    batch_size=BATCH_SIZE, 
+                    scale_params=True, to_numpy=True, drop_remainder=False, shuffle=False)
         
         lfi_dataset = stack_tfdatasets(summaries_A_file["summaries_lfi"], summaries_A_file["params_lfi"],
-                    lfi_files_B, batch_size=BATCH_SIZE, scale_params=False, to_numpy=True, epochs=3, shuffle=False)
+                    lfi_files_B, 
+                    add_noise=False,
+                    batch_size=BATCH_SIZE, scale_params=False, to_numpy=True, epochs=3, shuffle=False)
         
         sys_dataset = stack_tfdatasets(summaries_A_file["summaries_sys"], summaries_A_file["params_sys"],
-                    test_sys_files_B, batch_size=BATCH_SIZE, scale_params=False, to_numpy=True, epochs=3, shuffle=False)
+                    test_sys_files_B, 
+                    add_noise=False,
+                    batch_size=BATCH_SIZE, scale_params=False, to_numpy=True, epochs=3, shuffle=False)
         
         train_dataset_unscaled = stack_tfdatasets(summaries_A_file["summaries_train"], summaries_A_file["params_train"],
-                                            train_files_B, batch_size=BATCH_SIZE, scale_params=False, to_numpy=True, shuffle=False)
+                                            train_files_B, 
+                                            add_noise=True,
+                                            batch_size=BATCH_SIZE, scale_params=False, to_numpy=True, shuffle=False)
         
 
         

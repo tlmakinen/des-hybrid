@@ -42,6 +42,7 @@ patch_net:
   batch_size: 128
   n_components: 4
   n_hidden_mdn: 100
+  noise_amp: 0.001
   n_layers_mdn: 1
   w_filename: w_patch_
 
