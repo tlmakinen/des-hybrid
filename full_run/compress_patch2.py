@@ -531,6 +531,7 @@ if __name__ == "__main__":
 
         BATCH_SIZE = config["patch_net"]["batch_size"]
         EPOCHS = config["patch_net"]["epochs"] # max epochs
+        #epochs = config["patch_net"]["epochs"]
         n_readers=1
 
         def gaussian_noise_augmentation(x, y, cls, param_idx=None):
@@ -642,10 +643,10 @@ if __name__ == "__main__":
 
         # train, test validation datasets
         train_dataset = stack_tfdatasets(summaries_A_file["summaries_train"], summaries_A_file["params_train"],
-                                            train_files_B, batch_size=BATCH_SIZE, scale_params=True, to_numpy=True)
+                                            train_files_B, batch_size=BATCH_SIZE, scale_params=True, epochs=EPOCHS*2, to_numpy=True)
         
         test_dataset = stack_tfdatasets(summaries_A_file["summaries_test"], summaries_A_file["params_test"],
-                    test_files_B, batch_size=BATCH_SIZE, scale_params=True, to_numpy=True, drop_remainder=False)
+                    test_files_B, batch_size=BATCH_SIZE, scale_params=True, to_numpy=True,epochs=EPOCHS*2, drop_remainder=False)
 
         
         lfi_dataset = stack_tfdatasets(summaries_A_file["summaries_lfi"], summaries_A_file["params_lfi"],
@@ -693,6 +694,7 @@ if __name__ == "__main__":
 
     # MODEL --> from config
     print("testing network initialisation ...")
+    
 
     model_key = jr.PRNGKey(int(config["model_key"]))
 
@@ -701,7 +703,7 @@ if __name__ == "__main__":
                     act_cnn=nn.relu,
                     act_dense=smooth_leaky,
                     cls_compression=cls_compression,
-                    n_extra=4,
+                    n_extra=config["n_summaries"][patch],
                     n_existing=N_EXISTING,
                     n_summaries_cls=N_SUMMARIES_CLS,
                     n_total=N_TOTAL_SUMMARIES,
@@ -741,7 +743,7 @@ if __name__ == "__main__":
                     act_cnn=nn.relu,
                     act_dense=smooth_leaky,
                     cls_compression=cls_compression,
-                    n_extra=4,
+                    n_extra=config["n_summaries"][patch],
                     n_existing=N_EXISTING,
                     n_summaries_cls=N_SUMMARIES_CLS,
                     n_total=N_TOTAL_SUMMARIES,
@@ -795,7 +797,6 @@ if __name__ == "__main__":
             w = None
 
         
-        epochs = config["patch_net"]["epochs"]
         patience = config["patch_net"]["patience"]
         learning_rate = config["patch_net"]["learning_rate"]
 
@@ -815,7 +816,7 @@ if __name__ == "__main__":
         w, losses = epe_minimiser.fit(jr.PRNGKey(2), 
                             data=None, 
                             batch_size=128,
-                            n_iter=epochs,
+                            n_iter=EPOCHS,
                             n_early_stopping_patience=patience,  #20
                             train_dataset=train_dataset,
                             val_dataset=test_dataset,
@@ -832,7 +833,8 @@ if __name__ == "__main__":
         save_obj(losses, os.path.join(outdir, "history"))
 
         # save network config just in case
-        with open('config_patch_%s.yaml'%(patch), 'w') as outfile:
+        configdir = os.path.join(outdir,  'config_patch_%s.yaml'%(patch))
+        with open(configdir, 'w') as outfile:
             yaml.dump(config, outfile, default_flow_style=False)
 
 

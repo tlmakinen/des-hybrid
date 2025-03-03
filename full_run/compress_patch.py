@@ -19,6 +19,7 @@ import cloudpickle as pickle
 import tensorflow as tf
 import tensorflow_datasets as tfds
 import sys,os,re,yaml,glob
+import argparse
 
 def load_config(config_path):
     with open(os.path.join(config_path)) as file:
@@ -246,6 +247,7 @@ def consolidate_dsets(A,B):
             }
 
 
+
 # LOAD IN SUMMARIES FROM PATCH A, ORDERED ACCORDINGLY
 def stack_tfdatasets(summaries_A, params_A,
                         files_B,
@@ -261,6 +263,7 @@ def stack_tfdatasets(summaries_A, params_A,
     
     tfdataset_A = tf.data.Dataset.from_tensor_slices((summaries_A, params_A)) # we probably don't need the params here
     tfdataset_B = get_tfdataset(files_B, batch_size=batch_size, scale_params=scale_params, 
+                                epochs=epochs,
                                 to_numpy=False, shuffle=False, 
                                 shuffle_buffer_size=shuffle_buffer_size, 
                                 drop_remainder=drop_remainder)
@@ -375,6 +378,86 @@ class simplePatchCNN(nn.Module):
         outputs = outputs.at[self.summary_idxs[0]:self.summary_idxs[1]].set(x)
 
         return outputs
+    
+
+
+
+class simplePatchCNN_dict(nn.Module):
+    """CNN to extract extra information from WL field"""
+    filters: Sequence[int]
+    cls_compression: Callable
+    n_extra: int 
+    n_summaries_cls: int
+    n_existing: int
+    n_total: int
+    patch: str # which patch we're operating on
+    act_cnn: Callable = nn.relu
+    act_dense: Callable = smooth_leaky
+    dtype: Any = jnp.float32
+
+
+    @nn.compact
+    def __call__(self, x):
+
+        # unpack data
+        inputs = x
+
+        # RIGHT SO HERE WE HAVE EXISTING CLS NUMBERS AND OLD SUMMARIES
+        # TAKE THE PATCH A SUMMARIES AND VARY THE CLS COMPRESSION UNDER NOISE
+
+        # EXISTING INFO IS A DICTIONARY !!!
+        existing_info = inputs["A"]["summaries"] #[:self.n_existing] # take everyting and then we'll write over with Cls
+
+        # pass the cls through the network again to increase variation in the optimisation
+        cls_summs = self.cls_compression(inputs["B"]["cls"])
+        
+        x = inputs["B"]["kappa"]
+        x = x.astype(self.dtype)
+
+        filters = self.filters
+        
+        for i in range(8):
+            x = nn.Conv(features=filters, kernel_size=(3,3), strides=(1,1), padding="SAME", dtype=self.dtype)(x)
+            x = self.act_cnn(x)
+            x = nn.avg_pool(x, (2,2), strides=(2,2))
+
+        # dense net out
+        x = x.reshape(-1)
+        x = nn.Dense(20)(x)
+        x = self.act_dense(x)
+        x = nn.Dense(20)(x)
+        x = self.act_dense(x)
+        x = nn.Dense(10)(x)
+        x = self.act_dense(x)
+        x = nn.Dense(10)(x)
+        x = self.act_dense(x)
+        x = nn.Dense(5)(x)
+        x = self.act_dense(x)
+        x = nn.Dense(5)(x)
+        x = self.act_dense(x)
+
+
+        # vanilla code
+        x = nn.Dense(self.n_extra, dtype=self.dtype)(x).reshape(-1)
+        x = x.reshape(-1).astype(jnp.float32) # make sure output is float32
+        x = nn.LayerNorm()(x)
+
+        # concatenate all existing information
+        #x = jnp.concatenate([cls_summs, existing_info.reshape(-1), x])
+
+        # set all existing information in its right place
+        # | Cls |     a|      b|     c|
+
+        # first fill in dictionary of existing summaries
+        outputs = dict(cls_summaries=cls_summs,
+                        A=existing_info["A"],
+                        B=existing_info["B"],
+                        C=existing_info["C"])
+        
+        outputs.update(self.patch, x)
+        
+        # return dictionary with outputs --> then sort out details with MDN
+        return outputs
 
 
 # ----------------------------------------------------------------------------
@@ -405,16 +488,16 @@ if __name__ == "__main__":
 
     # ---- config stuff
     patch = sys.argv[2]   # should probably arg to call
+    train = bool(int(sys.argv[4])) # whether or not to train the network
+    load_weights = bool(int(sys.argv[5]))
+
     print("beginning compression for patch %s"%(patch))
 
     with tf.device("CPU"):
-        # could these move to config file ?
-        sel_params = ["om","S8","w"]
-        cl_modes = ["1_1","1_2","1_3","1_4","2_2","2_3","2_4","3_3","3_4", "4_4"]
 
 
-        BATCH_SIZE = 128
-        EPOCHS = 1000 # max epochs
+        BATCH_SIZE = config["patch_net"]["batch_size"]
+        EPOCHS = config["patch_net"]["epochs"] # max epochs
         n_readers=1
 
         def gaussian_noise_augmentation(x, y, cls, param_idx=None):
@@ -442,7 +525,7 @@ if __name__ == "__main__":
 
         # smarter way to collect files ?
         train_files, test_files, lfi_files, test_sys_files = return_train_test_lists('{}'.format("A"))
-        train_files_B, test_files_B, lfi_files_B, test_sys_files_B = return_train_test_lists('{}'.format("B"))
+        train_files_B, test_files_B, lfi_files_B, test_sys_files_B = return_train_test_lists('{}'.format(patch))
 
         # check to see if files are mismatched
         for i,t in enumerate(train_files):
@@ -473,6 +556,7 @@ if __name__ == "__main__":
         
         # summaries code
         # SOME IMPORTANT HYPERPARAMS --> FROM CONFIG
+        epochs = config["patch_net"]["epochs"]
         N_PARAMS = config["n_params"]
 
         N_SUMMARIES_CLS = config["n_summaries"]["cls"]    # default 10
@@ -527,10 +611,10 @@ if __name__ == "__main__":
 
         # train, test validation datasets
         train_dataset = stack_tfdatasets(summaries_A_file["summaries_train"], summaries_A_file["params_train"],
-                                            train_files_B, batch_size=BATCH_SIZE, scale_params=True, to_numpy=True)
+                                            train_files_B, batch_size=BATCH_SIZE, scale_params=True, epochs=epochs*2, to_numpy=True)
         
         test_dataset = stack_tfdatasets(summaries_A_file["summaries_test"], summaries_A_file["params_test"],
-                    test_files_B, batch_size=BATCH_SIZE, scale_params=True, to_numpy=True, drop_remainder=False)
+                    test_files_B, batch_size=BATCH_SIZE, scale_params=True, to_numpy=True, epochs=epochs*2, drop_remainder=False)
 
         
         lfi_dataset = stack_tfdatasets(summaries_A_file["summaries_lfi"], summaries_A_file["params_lfi"],
@@ -661,43 +745,179 @@ if __name__ == "__main__":
     # instatiate minimiser code
     epe_minimiser = EPE_minimiser(density_estimator=model)
 
-    print('training compression ...')
-
-    # Clip gradients at max value, and evt. apply weight decay
-    transf = [optax.clip(2.0)]
-    # transf.append(optax.add_decayed_weights(1e-4))
-    optimizer = optax.chain(
-        *transf,
-        optax.adam(learning_rate=1e-5) # 8e-6
-    )
-
-
-    epochs = config["patch_net"]["epochs"]
-    patience = config["patch_net"]["patience"]
 
     outdir = os.path.join(config["project_dir"], "patch_%s_net_%s/"%(patch, config["run_name"]))
-    print("saving network weights and results to: ", outdir)
+    # load_dir = ...
 
-    w, losses = epe_minimiser.fit(jr.PRNGKey(2), 
-                        data=None, 
-                        batch_size=128,
-                        n_iter=epochs,
-                        n_early_stopping_patience=patience,  #20
-                        train_dataset=train_dataset,
-                        val_dataset=test_dataset,
-                        optimizer=optimizer,
-                        outdir=outdir,
-                        #params=w,
-                        )
+    if train: 
+
+        print('training compression ...')
+
+        if load_weights:
+            print("loading network weights and results from: ", outdir)
+            w = load_obj(outdir + "best_params.pkl")
+        
+        else: 
+            print("training network from scratch")
+            w = None
+
+        
+        
+        patience = config["patch_net"]["patience"]
+        learning_rate = config["patch_net"]["learning_rate"]
+
+        # Clip gradients at max value, and evt. apply weight decay
+        transf = [optax.clip(2.0)]
+        transf.append(optax.add_decayed_weights(1e-4))
+        optimizer = optax.chain(
+            *transf,
+            optax.adam(learning_rate=learning_rate) # 8e-6
+        )
 
 
-    # save everything
-    # save weights, losses, and config script to the output directory
 
-    print('saving everything')
-    save_obj(losses, os.path.join(outdir, "history"))
-    save_obj(config, os.path.join(outdir, "config_dict")) # save config just in case
 
+        print("saving network weights and results to: ", outdir)
+
+        w, losses = epe_minimiser.fit(jr.PRNGKey(2), 
+                            data=None, 
+                            batch_size=128,
+                            n_iter=epochs,
+                            n_early_stopping_patience=patience,  #20
+                            train_dataset=train_dataset,
+                            val_dataset=test_dataset,
+                            optimizer=optimizer,
+                            outdir=outdir,
+                            params=w,
+                            )
+
+
+        # save everything
+        # save weights, losses, and config script to the output directory
+
+        print('saving everything')
+        save_obj(losses, os.path.join(outdir, "history"))
+        save_obj(config, os.path.join(outdir, "config_dict")) # save config just in case
+
+
+    else:
+        print("loading network weights and results from: ", outdir)
+        w = load_obj(outdir + "best_params.pkl")
 
 
     # get all the summaries
+    print("collecting compressed summaries from datasets")
+
+
+
+    def apply_embedding(input_data, w=w):
+        fn = lambda d: model.apply(w, x=d, method=model.get_embed)
+        return jax.vmap(fn)(input_data)
+
+
+    # function for collecting summaries from each dataset -> could be made neater
+
+    def get_unshuffled_summaries(
+            outname,
+            existing_summary_file,
+                            ):
+        
+        # train, test validation datasets
+        train_dataset2 = stack_tfdatasets(summaries_A_file["summaries_train"], summaries_A_file["params_train"],
+                                            train_files_B, batch_size=BATCH_SIZE, scale_params=True, to_numpy=True, shuffle=False)
+        
+        # scale params for training (default)
+        test_dataset2 = stack_tfdatasets(summaries_A_file["summaries_test"], summaries_A_file["params_test"],
+                    test_files_B, batch_size=BATCH_SIZE, scale_params=True, to_numpy=True, drop_remainder=False, shuffle=False)
+        
+        lfi_dataset = stack_tfdatasets(summaries_A_file["summaries_lfi"], summaries_A_file["params_lfi"],
+                    lfi_files_B, batch_size=BATCH_SIZE, scale_params=False, to_numpy=True, epochs=3, shuffle=False)
+        
+        sys_dataset = stack_tfdatasets(summaries_A_file["summaries_sys"], summaries_A_file["params_sys"],
+                    test_sys_files_B, batch_size=BATCH_SIZE, scale_params=False, to_numpy=True, epochs=3, shuffle=False)
+        
+        train_dataset_unscaled = stack_tfdatasets(summaries_A_file["summaries_train"], summaries_A_file["params_train"],
+                                            train_files_B, batch_size=BATCH_SIZE, scale_params=False, to_numpy=True, shuffle=False)
+        
+
+        
+        summaries_LFI = []
+        params_Tru_LFI = []
+        
+        for i in tqdm(range(lfi_dataset.num_batch_per_epoch)):
+        
+            data = next(iter(lfi_dataset))
+        
+            X  = data['y']
+            theta_true = data['theta']
+            summs_out = apply_embedding(X)
+            params_Tru_LFI.append(theta_true)
+            summaries_LFI.append(summs_out)
+        
+        
+        summaries_test = []
+        params_Tru_test = []
+        
+        for i in tqdm(range(test_dataset2.num_batch_per_epoch)):
+        
+            data = next(iter(test_dataset2))
+        
+            X  = data['y']
+            theta_true = data['theta']
+            summs_out = apply_embedding(X)
+            params_Tru_test.append(theta_true)
+            summaries_test.append(summs_out)
+        
+        
+        summaries_sys = []
+        params_Tru_sys = []
+        cls_sys = []
+        
+        for i in tqdm(range(sys_dataset.num_batch_per_epoch)):
+        
+            data = next(iter(sys_dataset))
+        
+            X  = data['y']
+            cls = data['y']['B']['cls']
+            theta_true = data['theta']
+            summs_out = apply_embedding(X)
+            params_Tru_sys.append(theta_true)
+            summaries_sys.append(summs_out)
+            cls_sys.append(cls)
+        
+        
+        summaries_train = []
+        params_Tru_train = []
+        
+        for i in tqdm(range(train_dataset2.num_batch_per_epoch)):
+        
+            data = next(iter(train_dataset2))
+        
+            X  = data['y']
+            theta_true = data['theta']
+            summs_out = apply_embedding(X)
+            params_Tru_train.append(theta_true)
+            summaries_train.append(summs_out)
+        
+        
+        # save all summaries from patch A to pull in
+        np.savez(outname,
+                summaries_lfi=np.concatenate(summaries_LFI, 0),
+                params_lfi=np.concatenate(params_Tru_LFI, 0),
+                summaries_test=np.concatenate(summaries_test,0),
+                params_test=np.concatenate(params_Tru_test,0),
+                summaries_sys=np.concatenate(summaries_sys,0),
+                params_sys=np.concatenate(params_Tru_sys,0),
+                summaries_train=np.concatenate(summaries_train,0),
+                params_train=np.concatenate(params_Tru_train,0),
+                # save file lists as well
+                train_files=train_files,
+                test_files=test_files,
+                lfi_files=lfi_files,
+                sys_files=test_sys_files
+                )
+
+    # TODO: make this naming more clever
+    outname = config["summary_path"] + config["run_name"] + "_" + patch
+
+    get_unshuffled_summaries(outname, summaries_A_file)

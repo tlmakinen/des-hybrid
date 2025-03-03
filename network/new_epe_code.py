@@ -97,6 +97,7 @@ def load_obj(name):
 def is_batchable(x: Any, batch_size: int):
     return hasattr(x, "shape") and len(x.shape) > 0 and x.shape[0] == batch_size
 
+
 @jax.jit
 def smooth_leaky(x: Array) -> Array:
   r"""Smooth Leaky rectified linear unit activation function.
@@ -114,6 +115,8 @@ def smooth_leaky(x: Array) -> Array:
     x : input array
   """
   return jnp.where(x < -1, x, jnp.where((x < 1), ((-(jnp.abs(x)**3) / 3) + x*(x+2) + (1/3)), 3*x)) / 3.5
+
+  
 
 
 class MLP(nn.Module):

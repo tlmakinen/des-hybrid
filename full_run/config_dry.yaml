@@ -3,9 +3,9 @@
 
 # CONFIGURATION RUN NAME
 # output directory --> keep Cls stuff in top level
-project_dir: /data103/makinen/des_results/testing_codebase/
+project_dir: /data103/makinen/des_results/dry_run/
 
-summary_path:  /data103/makinen/des_results/testing_codebase/summaries_
+summary_path:  /data103/makinen/des_results/dry_run/summaries_
 run_name: test
 
 theta_star: [0.3, 0.8, -1.0]   # fiducial model for centering MDNs
@@ -36,7 +36,7 @@ patch_net:
   act_dense: smooth_leaky  # for dense network activations --> in MPK net, these are smooth_leaky
   n_extra : 4   # number of output summaries
   n_filters: 32 # number of cnn filters (32 is default)
-  epochs: 1
+  epochs: 1500
   patience: 100
   learning_rate: 0.00001
   batch_size: 128
