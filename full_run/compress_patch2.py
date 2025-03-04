@@ -139,31 +139,27 @@ def return_train_test_lists(patch):
     return train_file_list, test_file_list, lfi_file_list, test_file_systematic_list
 
 
+
 def return_baryon_lists(patch, base_path="/data103/makinen/des_sims/baryon_tests/cosmogrid_baryons_tfrec/"):
-    files = glob.glob(base_path + "{}/".format(patch) +"shear_maps_*")
-    print(base_path + "{}/".format(patch) +"shear_maps_*")
+    files = glob.glob(base_path + "{}/".format(patch) +"*_noise_*")
 
     # sort the files to match A to B to C !
     files.sort(key=lambda x:[int(c) if c.isdigit() else c for c in re.split(r'(\d+)', x)])
 
     
     print(len(files))
-    train_file_list = []
-    test_file_list = []
-    lfi_file_list = []
-    test_file_systematic_list = []
+    no_baryons = []
+    baryons = []
     for file in files:
-        noiserel = file.split("_rel")[0].split('noiserel')[-1]
-        if noiserel in use_noise_realisations:
-            if noiserel == '3':
-                test_file_list.append(file)
-            elif noiserel == '10':
-                lfi_file_list.append(file)
-            elif noiserel == '12':
-                test_file_systematic_list.append(file)
-            else:
-                train_file_list.append(file)
-    return train_file_list, test_file_list, lfi_file_list, test_file_systematic_list
+        if "no_baryons" in file:
+            no_baryons.append(file)
+        else:
+            baryons.append(file)
+
+    print("num baryon files:", len(baryons))
+    print("num no baryon files:", len(no_baryons))
+    return baryons, no_baryons
+
 
 def parse_serialized_file(cereal_yum, scale_params=True, filter_w=True):
 
@@ -186,7 +182,7 @@ def parse_serialized_file(cereal_yum, scale_params=True, filter_w=True):
             # load parameters
             "s8": tf.io.FixedLenFeature([], tf.float32),
             "om": tf.io.FixedLenFeature([], tf.float32),
-            "AIA": tf.io.FixedLenFeature([], tf.float32),
+            #"AIA": tf.io.FixedLenFeature([], tf.float32),
             "w": tf.io.FixedLenFeature([], tf.float32)
     }
 
@@ -576,7 +572,7 @@ if __name__ == "__main__":
                 x += tf.random.normal(
                                     shape = [512, 512,8],
                                     mean = 0,
-                                    stddev = float(config["patch_net"]["noise_amp"]),
+                                    stddev = 1e-3, #float(config["patch_net"]["noise_amp"]),
                                     dtype = tf.float32
                                     ) #Mask option?
 
@@ -584,7 +580,7 @@ if __name__ == "__main__":
                 cls += tf.random.normal(
                             shape = [10, 2, 4, 28],
                             mean = 0, 
-                            stddev =std_cl*float(config["patch_net"]["noise_amp"]),
+                            stddev =std_cl * 1e-3, 
                             dtype = tf.float32
                             )
 
@@ -616,6 +612,10 @@ if __name__ == "__main__":
 
         print("train files: ", num_train_files, "test files: ", num_test_files, "lfi files: ", num_lfi_files, "test sys files: ", num_sys_files,)
 
+
+        # collect baryon files
+        print('collecting baryon tests')
+        baryon_files, no_baryon_files = return_baryon_lists(patch)
 
         # ----- dataset code -----
 
@@ -666,7 +666,13 @@ if __name__ == "__main__":
                 summaries_sys=np.zeros((len(test_sys_files), N_TOTAL_SUMMARIES)),
                 params_sys=np.zeros((len(test_sys_files), N_PARAMS)),
                 summaries_train=np.zeros((len(train_files), N_TOTAL_SUMMARIES)),
-                params_train=np.zeros((len(train_files), N_PARAMS))
+                params_train=np.zeros((len(train_files), N_PARAMS)),
+
+                # collect baryon summary file
+                summaries_baryons=np.zeros((len(baryon_files), N_TOTAL_SUMMARIES)),
+                summaries_no_baryons=np.zeros((len(no_baryon_files), N_TOTAL_SUMMARIES)),
+                params_baryons=np.zeros((len(baryon_files), N_PARAMS)),
+                params_no_baryons=np.zeros((len(baryon_files), N_PARAMS)),
                 )
 
         else:
@@ -682,9 +688,11 @@ if __name__ == "__main__":
         # train, test validation datasets
         train_dataset = stack_tfdatasets(summaries_A_file["summaries_train"], summaries_A_file["params_train"],
                                             train_files_B, batch_size=BATCH_SIZE, scale_params=True, epochs=EPOCHS*2, to_numpy=True)
-        
+
         test_dataset = stack_tfdatasets(summaries_A_file["summaries_test"], summaries_A_file["params_test"],
-                    test_files_B, batch_size=BATCH_SIZE, scale_params=True, to_numpy=True,epochs=EPOCHS*2, drop_remainder=False)
+                    test_files_B, 
+                    add_noise=True,
+                    batch_size=BATCH_SIZE, scale_params=True, to_numpy=True,epochs=EPOCHS*2, drop_remainder=False)
 
         
         lfi_dataset = stack_tfdatasets(summaries_A_file["summaries_lfi"], summaries_A_file["params_lfi"],
@@ -693,6 +701,16 @@ if __name__ == "__main__":
         sys_dataset = stack_tfdatasets(summaries_A_file["summaries_sys"], summaries_A_file["params_sys"],
                     test_sys_files_B, batch_size=BATCH_SIZE, scale_params=False, to_numpy=True, epochs=3)
         
+
+        baryon_dataset = stack_tfdatasets(summaries_A_file["summaries_baryons"], np.zeros((summaries_A_file["summaries_baryons"].shape[0], N_PARAMS)),
+                    baryon_files, batch_size=32, scale_params=False, to_numpy=True, epochs=3, add_noise=False)
+        
+        no_baryon_dataset = stack_tfdatasets(summaries_A_file["summaries_no_baryons"],  np.zeros((summaries_A_file["summaries_baryons"].shape[0], N_PARAMS)),
+                    no_baryon_files, batch_size=32, scale_params=False, to_numpy=True, epochs=3, add_noise=False)
+        
+        print("testing baryon datasets")
+        data = next(iter(baryon_dataset))
+
 
         # check to see that parameters line up along datasets
         if not create_new_summary_file:
@@ -837,10 +855,11 @@ if __name__ == "__main__":
         
         patience = config["patch_net"]["patience"]
         learning_rate = config["patch_net"]["learning_rate"]
+        batch_size = config["patch_net"]["batch_size"]
 
         # Clip gradients at max value, and evt. apply weight decay
         transf = [optax.clip(2.0)]
-        transf.append(optax.add_decayed_weights(1e-4))
+        #transf.append(optax.add_decayed_weights(1e-4))
         optimizer = optax.chain(
             *transf,
             optax.adam(learning_rate=learning_rate) # 8e-6
@@ -853,7 +872,7 @@ if __name__ == "__main__":
 
         w, losses = epe_minimiser.fit(jr.PRNGKey(2), 
                             data=None, 
-                            batch_size=128,
+                            batch_size=batch_size,
                             n_iter=EPOCHS,
                             n_early_stopping_patience=patience,  #20
                             train_dataset=train_dataset,
@@ -904,35 +923,40 @@ if __name__ == "__main__":
                             ):
         
         # train, test validation datasets
-        train_dataset2 = stack_tfdatasets(summaries_A_file["summaries_train"], summaries_A_file["params_train"],
+        train_dataset2 = stack_tfdatasets(existing_summary_file["summaries_train"], existing_summary_file["params_train"],
                                             train_files_B, 
-                                            add_noise=True,
+                                            add_noise=False,
                                             batch_size=BATCH_SIZE, 
                                             scale_params=True, to_numpy=True, shuffle=False)
         
         # scale params for training (default)
-        test_dataset2 = stack_tfdatasets(summaries_A_file["summaries_test"], summaries_A_file["params_test"],
+        test_dataset2 = stack_tfdatasets(existing_summary_file["summaries_test"], existing_summary_file["params_test"],
                     test_files_B, 
                     add_noise=False,
                     batch_size=BATCH_SIZE, 
                     scale_params=True, to_numpy=True, drop_remainder=False, shuffle=False)
         
-        lfi_dataset = stack_tfdatasets(summaries_A_file["summaries_lfi"], summaries_A_file["params_lfi"],
+        lfi_dataset = stack_tfdatasets(existing_summary_file["summaries_lfi"], existing_summary_file["params_lfi"],
                     lfi_files_B, 
                     add_noise=False,
                     batch_size=BATCH_SIZE, scale_params=False, to_numpy=True, epochs=3, shuffle=False)
         
-        sys_dataset = stack_tfdatasets(summaries_A_file["summaries_sys"], summaries_A_file["params_sys"],
+        sys_dataset = stack_tfdatasets(existing_summary_file["summaries_sys"], existing_summary_file["params_sys"],
                     test_sys_files_B, 
                     add_noise=False,
                     batch_size=BATCH_SIZE, scale_params=False, to_numpy=True, epochs=3, shuffle=False)
         
-        train_dataset_unscaled = stack_tfdatasets(summaries_A_file["summaries_train"], summaries_A_file["params_train"],
+        train_dataset_unscaled = stack_tfdatasets(existing_summary_file["summaries_train"], existing_summary_file["params_train"],
                                             train_files_B, 
                                             add_noise=True,
                                             batch_size=BATCH_SIZE, scale_params=False, to_numpy=True, shuffle=False)
         
 
+        baryon_dataset = stack_tfdatasets(existing_summary_file["summaries_baryons"], existing_summary_file["params_baryons"],
+                    baryon_files, batch_size=32, scale_params=False, to_numpy=True, epochs=3, add_noise=False)
+        
+        no_baryon_dataset = stack_tfdatasets(existing_summary_file["summaries_no_baryons"], existing_summary_file["params_no_baryons"],
+                    no_baryon_files, batch_size=32, scale_params=False, to_numpy=True, epochs=3, add_noise=False)
         
         summaries_LFI = []
         params_Tru_LFI = []
@@ -992,6 +1016,29 @@ if __name__ == "__main__":
             params_Tru_train.append(theta_true)
             summaries_train.append(summs_out)
         
+
+        summaries_baryons = []
+
+        for i in tqdm(range(baryon_dataset.num_batch_per_epoch)):
+        
+            data = next(iter(baryon_dataset))
+        
+            X  = data['y']
+            summs_out = apply_embedding(X)
+            summaries_baryons.append(summs_out)
+
+
+        summaries_no_baryons = []
+
+        for i in tqdm(range(no_baryon_dataset.num_batch_per_epoch)):
+        
+            data = next(iter(no_baryon_dataset))
+        
+            X  = data['y']
+            summs_out = apply_embedding(X)
+            summaries_no_baryons.append(summs_out)
+        
+        
         
         # save all summaries from patch A to pull in
         np.savez(outname,
@@ -1003,6 +1050,9 @@ if __name__ == "__main__":
                 params_sys=np.concatenate(params_Tru_sys,0),
                 summaries_train=np.concatenate(summaries_train,0),
                 params_train=np.concatenate(params_Tru_train,0),
+
+                summaries_no_baryons=np.concatenate(summaries_no_baryons,0),
+                summaries_baryons=np.concatenate(summaries_baryons,0),
                 # save file lists as well
                 train_files=train_files,
                 test_files=test_files,
