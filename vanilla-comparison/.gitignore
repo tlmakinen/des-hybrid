@@ -1,3 +1,5 @@
 *.pkl
 *.npz
 *.npy
+events.out.tfevents.*
+sbi-logs/*
