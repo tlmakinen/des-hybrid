@@ -33,6 +33,12 @@ sys.path.append("/home/makinen/repositories/des-hybrid/")
 from training_loop import *
 from network.new_epe_code import *
 
+def get_S8(theta):
+    return np.array([theta[:, 0], theta[:, 1]*np.sqrt(theta[:, 0]/0.3), theta[:, 2]]).T
+
+def get_sigma8(theta):
+    return np.array([theta[:, 0], theta[:, 1]/np.sqrt(theta[:, 0]/0.3), theta[:, 2]]).T
+
 
 
 
@@ -122,17 +128,17 @@ def main():
 
     file = np.load(config["cls"]["cls_dataset"])
 
-    params_train = file["params_train"]
+    params_train = get_S8(file["params_train"])
     cls_train = file["cls_train"]
 
-    params_LFI = file["params_lfi"]
+    params_LFI = get_S8(file["params_lfi"])
     cls_lfi = file["cls_lfi"]
 
-    params_test = file["params_test"]
+    params_test = get_S8(file["params_test"])
     cls_test = file["cls_test"]
 
 
-    params_sys = file["params_sys"]
+    params_sys = get_S8(file["params_sys"])
     cls_sys = file["cls_sys"]
 
 
