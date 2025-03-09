@@ -1,4 +1,3 @@
-
 import jax
 import jax.numpy as jnp
 import tensorflow_probability as tfp
@@ -20,6 +19,8 @@ import tensorflow as tf
 import tensorflow_datasets as tfds
 import sys,os,re,yaml,glob
 import argparse
+
+from flax.linen.initializers import he_normal
 
 def load_config(config_path):
     with open(os.path.join(config_path)) as file:
@@ -334,6 +335,7 @@ class simplePatchCNN(nn.Module):
     n_existing: int
     n_total: int
     summary_idxs: tuple
+    scale_kappa: float = 1.0
     act_cnn: Callable = nn.relu
     act_dense: Callable = smooth_leaky
     dtype: Any = jnp.float32
@@ -355,11 +357,15 @@ class simplePatchCNN(nn.Module):
         
         x = inputs["B"]["kappa"]
         x = x.astype(self.dtype)
+        x *= self.scale_kappa
 
         filters = self.filters
         
         for i in range(8):
-            x = nn.Conv(features=filters, kernel_size=(3,3), strides=(1,1), padding="SAME", dtype=self.dtype)(x)
+            x = nn.Conv(features=filters, kernel_size=(3,3),
+                            strides=(1,1), \
+                            kernel_init=he_normal(),
+                            padding="SAME", dtype=self.dtype)(x)
             x = self.act_cnn(x)
             x = nn.avg_pool(x, (2,2), strides=(2,2))
 
@@ -408,85 +414,6 @@ class simplePatchCNN(nn.Module):
     
 
 
-
-class simplePatchCNN_dict(nn.Module):
-    """CNN to extract extra information from WL field"""
-    filters: Sequence[int]
-    cls_compression: Callable
-    n_extra: int 
-    n_summaries_cls: int
-    n_existing: int
-    n_total: int
-    patch: str # which patch we're operating on
-    act_cnn: Callable = nn.relu
-    act_dense: Callable = smooth_leaky
-    dtype: Any = jnp.float32
-
-
-    @nn.compact
-    def __call__(self, x):
-
-        # unpack data
-        inputs = x
-
-        # RIGHT SO HERE WE HAVE EXISTING CLS NUMBERS AND OLD SUMMARIES
-        # TAKE THE PATCH A SUMMARIES AND VARY THE CLS COMPRESSION UNDER NOISE
-
-        # EXISTING INFO IS A DICTIONARY !!!
-        existing_info = inputs["A"]["summaries"] #[:self.n_existing] # take everyting and then we'll write over with Cls
-
-        # pass the cls through the network again to increase variation in the optimisation
-        cls_summs = self.cls_compression(inputs["B"]["cls"])
-        
-        x = inputs["B"]["kappa"]
-        x = x.astype(self.dtype)
-
-        filters = self.filters
-        
-        for i in range(8):
-            x = nn.Conv(features=filters, kernel_size=(3,3), strides=(1,1), padding="SAME", dtype=self.dtype)(x)
-            x = self.act_cnn(x)
-            x = nn.avg_pool(x, (2,2), strides=(2,2))
-
-        # dense net out
-        x = x.reshape(-1)
-        x = nn.Dense(20)(x)
-        x = self.act_dense(x)
-        x = nn.Dense(20)(x)
-        x = self.act_dense(x)
-        x = nn.Dense(10)(x)
-        x = self.act_dense(x)
-        x = nn.Dense(10)(x)
-        x = self.act_dense(x)
-        x = nn.Dense(5)(x)
-        x = self.act_dense(x)
-        x = nn.Dense(5)(x)
-        x = self.act_dense(x)
-
-
-        # vanilla code
-        x = nn.Dense(self.n_extra, dtype=self.dtype)(x).reshape(-1)
-        x = x.reshape(-1).astype(jnp.float32) # make sure output is float32
-        x = nn.LayerNorm()(x)
-
-        # concatenate all existing information
-        #x = jnp.concatenate([cls_summs, existing_info.reshape(-1), x])
-
-        # set all existing information in its right place
-        # | Cls |     a|      b|     c|
-
-        # first fill in dictionary of existing summaries
-        outputs = dict(cls_summaries=cls_summs,
-                        A=existing_info["A"],
-                        B=existing_info["B"],
-                        C=existing_info["C"])
-        
-        outputs.update(self.patch, x)
-        
-        # return dictionary with outputs --> then sort out details with MDN
-        return outputs
-
-
 # ----------------------------------------------------------------------------
 
 
@@ -507,6 +434,9 @@ if __name__ == "__main__":
     parser.add_argument('-l', '--load', type=bool, default=False,
                         help="whether or not to load weights for training")
     parser.add_argument('-ld', '--load_dir', help="weight directory for continued training")
+    parser.add_argument('-nc', '--no_noise_cls', type=bool, default=False, help="turn off noise for Cls")
+    parser.add_argument('-sk', '--scale_kappa', type=float, default=1.0, help="scale kappa maps by factor")
+    parser.add_argument('-cn', '--custom_name', type=str, default="", help="custom name for summary file")
 
 
     args = parser.parse_args()
@@ -552,6 +482,10 @@ if __name__ == "__main__":
         create_new_summary_file = True
     print("create new summary", create_new_summary_file)
 
+    scale_kappa = args.scale_kappa # defaults to 1.0
+    if scale_kappa != 1.0:
+        scale_kappa = config["patch_net"]["scale_kappa"]
+
     if load_weights:
         print('will be loading weights')
 
@@ -563,6 +497,10 @@ if __name__ == "__main__":
         EPOCHS = config["patch_net"]["epochs"] # max epochs
         #epochs = config["patch_net"]["epochs"]
         n_readers=1
+
+        no_noise_cls = bool(args.no_noise_cls)
+        if no_noise_cls:
+            print("not noising Cls for this training session")
 
         def gaussian_noise_augmentation(x, y, cls, param_idx=None, add_noise=True):
             """optionally add gaussian noise for training and return data as 
@@ -577,15 +515,17 @@ if __name__ == "__main__":
                                     ) #Mask option?
 
                 # add noise to cls
-                cls += tf.random.normal(
-                            shape = [10, 2, 4, 28],
-                            mean = 0, 
-                            stddev =std_cl * 1e-3, 
-                            dtype = tf.float32
-                            )
+                if not no_noise_cls:
+                    cls += tf.random.normal(
+                                shape = [10, 2, 4, 28],
+                                mean = 0, 
+                                stddev =std_cl * 1e-3, 
+                                dtype = tf.float32
+                                )
 
             if param_idx is not None:
                 y = tf.expand_dims(y[param_idx], 0)
+            
 
             # data is now a dictionary
             return {"y": {"kappa": x, "cls": cls}, "theta": y}
@@ -756,7 +696,7 @@ if __name__ == "__main__":
 
     patch_net = simplePatchCNN(
                     filters=32,
-                    act_cnn=nn.relu,
+                    act_cnn=smooth_leaky,
                     act_dense=smooth_leaky,
                     cls_compression=cls_compression,
                     n_extra=config["n_summaries"][patch],
@@ -804,6 +744,8 @@ if __name__ == "__main__":
                     n_summaries_cls=N_SUMMARIES_CLS,
                     n_total=N_TOTAL_SUMMARIES,
                     summary_idxs = idxs,
+                    # scaling kappa input to network
+                    scale_kappa = scale_kappa, # this defaults to 1.0
                     dtype=jnp.float32,
         )
 
@@ -811,12 +753,11 @@ if __name__ == "__main__":
             return self.embeding_net(x)
 
         def log_prob(self, x, y):
-            x = self.embeding_net(x)
+            x = self.get_embed(x)
             return self.mdn(x, y) 
         
         def __call__(self, x, y):
-            x = self.embeding_net(x)
-            return self.mdn(x, y)
+            return self.log_prob(x, y)
 
         
 
@@ -890,7 +831,7 @@ if __name__ == "__main__":
         save_obj(losses, os.path.join(outdir, "history"))
 
         # save network config just in case
-        configdir = os.path.join(outdir,  'config_patch_%s.yaml'%(patch))
+        configdir = os.path.join(outdir, 'config_patch_%s.yaml'%(patch))
         with open(configdir, 'w') as outfile:
             yaml.dump(config, outfile, default_flow_style=False)
 
@@ -952,11 +893,11 @@ if __name__ == "__main__":
                                             batch_size=BATCH_SIZE, scale_params=False, to_numpy=True, shuffle=False)
         
 
-        baryon_dataset = stack_tfdatasets(existing_summary_file["summaries_baryons"], existing_summary_file["params_baryons"],
-                    baryon_files, batch_size=32, scale_params=False, to_numpy=True, epochs=3, add_noise=False)
+        baryon_dataset = stack_tfdatasets(existing_summary_file["summaries_baryons"], np.zeros((summaries_A_file["summaries_baryons"].shape[0], N_PARAMS)),
+                    baryon_files, batch_size=32, scale_params=False, to_numpy=True, epochs=3, add_noise=False, shuffle=False)
         
-        no_baryon_dataset = stack_tfdatasets(existing_summary_file["summaries_no_baryons"], existing_summary_file["params_no_baryons"],
-                    no_baryon_files, batch_size=32, scale_params=False, to_numpy=True, epochs=3, add_noise=False)
+        no_baryon_dataset = stack_tfdatasets(existing_summary_file["summaries_no_baryons"], np.zeros((summaries_A_file["summaries_baryons"].shape[0], N_PARAMS)),
+                    no_baryon_files, batch_size=32, scale_params=False, to_numpy=True, epochs=3, add_noise=False, shuffle=False)
         
         summaries_LFI = []
         params_Tru_LFI = []
@@ -1061,7 +1002,13 @@ if __name__ == "__main__":
                 )
 
     # TODO: make this naming more clever
-    outname = config["summary_path"] + config["run_name"] + "_" + patch
+    outname = config["summary_path"] + config["run_name"] + "_" + patch + args.custom_name # add in custom name
     print("saving summaries to", outname)
 
     get_unshuffled_summaries(outname, summaries_A_file)
+
+    # saving configs
+    print("saving all configs")
+    configdir = os.path.join(outdir, args.custom_name +  'config_patch_%s.yaml'%(patch))
+    with open(configdir, 'w') as outfile:
+        yaml.dump(config, outfile, default_flow_style=False)
