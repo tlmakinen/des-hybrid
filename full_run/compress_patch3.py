@@ -163,6 +163,36 @@ def return_baryon_lists(patch, base_path="/data103/makinen/des_sims/baryon_tests
     return baryons, no_baryons
 
 
+def return_source_clustering_lists(patch, 
+                                   high_low,
+                                   base_path="/data103/makinen/des_sims/no_baryons_"
+                                   ):
+    """_summary_
+
+    Args:
+        patch (str): which patch (A,B,C) to analyse
+        high_low (str): 'high' or 'low' for source clustering type
+        base_path (str, optional): _description_. Defaults to "/data103/makinen/des_sims/no_baryons_".
+
+    Returns:
+        list: list of .tfrec files
+    """
+    files = glob.glob(base_path + high_low + "_SC_bias/tfrec/{}/".format(patch) +"*_noise_*")
+
+    # sort the files to match A to B to C !
+    files.sort(key=lambda x:[int(c) if c.isdigit() else c for c in re.split(r'(\d+)', x)])
+
+    
+    print(len(files))
+    flist = []
+    for file in files:
+        if "no_baryons" in file:
+            flist.append(file)
+
+    print("num files:", len(flist))
+    return flist
+
+
 def parse_serialized_file(cereal_yum, scale_params=True, filter_w=True):
 
     features = {
@@ -687,6 +717,10 @@ if __name__ == "__main__":
         print('collecting baryon tests')
         baryon_files, no_baryon_files = return_baryon_lists(patch)
 
+        print('collecting source clustering tests')
+        low_sc_files = return_source_clustering_lists(patch, "low")
+        high_sc_files = return_source_clustering_lists(patch, "high")
+
         # ----- dataset code -----
 
         print("collecting datasets ...")
@@ -743,6 +777,11 @@ if __name__ == "__main__":
                 summaries_no_baryons=np.zeros((len(no_baryon_files), N_TOTAL_SUMMARIES)),
                 params_baryons=np.zeros((len(baryon_files), N_PARAMS)),
                 params_no_baryons=np.zeros((len(baryon_files), N_PARAMS)),
+                # high and low source clustering
+                summaries_low_sc=np.zeros((len(low_sc_files), N_TOTAL_SUMMARIES)),
+                params_low_sc=np.zeros((len(low_sc_files), N_PARAMS)),
+                summaries_high_sc=np.zeros((len(high_sc_files), N_TOTAL_SUMMARIES)),
+                params_high_sc=np.zeros((len(high_sc_files), N_PARAMS)),
                 )
 
         else:
@@ -778,9 +817,16 @@ if __name__ == "__main__":
         no_baryon_dataset = stack_tfdatasets(summaries_A_file["summaries_no_baryons"],  np.zeros((summaries_A_file["summaries_baryons"].shape[0], N_PARAMS)),
                     no_baryon_files, batch_size=32, scale_params=False, to_numpy=True, epochs=3, add_noise=False, shuffle=False)
         
+        low_sc_dataset = stack_tfdatasets(summaries_A_file["summaries_low_sc"],  np.zeros((summaries_A_file["summaries_low_sc"].shape[0], N_PARAMS)),
+                    low_sc_files, batch_size=32, scale_params=False, to_numpy=True, epochs=3, add_noise=False, shuffle=False)
+        
+        high_sc_dataset = stack_tfdatasets(summaries_A_file["summaries_high_sc"],  np.zeros((summaries_A_file["summaries_high_sc"].shape[0], N_PARAMS)),
+                    high_sc_files, batch_size=32, scale_params=False, to_numpy=True, epochs=3, add_noise=False, shuffle=False)
+        
         print("testing baryon datasets")
         data = next(iter(baryon_dataset))
-
+        print("testing source clustering dataset")
+        data = next(iter(high_sc_dataset))
 
         # check to see that parameters line up along datasets
         if not create_new_summary_file:
@@ -1006,6 +1052,8 @@ if __name__ == "__main__":
             optax.adam(learning_rate=learning_rate) # 8e-6
         )
 
+        # add custom name to safeguard against deleting previous run
+        outdir += args.custom_name
 
 
 
@@ -1099,6 +1147,13 @@ if __name__ == "__main__":
         no_baryon_dataset = stack_tfdatasets(existing_summary_file["summaries_no_baryons"], np.zeros((summaries_A_file["summaries_baryons"].shape[0], N_PARAMS)),
                     no_baryon_files, batch_size=32, scale_params=False, to_numpy=True, epochs=3, add_noise=False, shuffle=False)
         
+
+        low_sc_dataset = stack_tfdatasets(summaries_A_file["summaries_low_sc"],  np.zeros((summaries_A_file["summaries_low_sc"].shape[0], N_PARAMS)),
+                    low_sc_files, batch_size=32, scale_params=False, to_numpy=True, epochs=3, add_noise=False, shuffle=False)
+        
+        high_sc_dataset = stack_tfdatasets(summaries_A_file["summaries_high_sc"],  np.zeros((summaries_A_file["summaries_high_sc"].shape[0], N_PARAMS)),
+                    high_sc_files, batch_size=32, scale_params=False, to_numpy=True, epochs=3, add_noise=False, shuffle=False)
+        
         summaries_LFI = []
         params_Tru_LFI = []
         
@@ -1179,6 +1234,28 @@ if __name__ == "__main__":
             summs_out = apply_embedding(X)
             summaries_no_baryons.append(summs_out)
         
+
+        summaries_high_sc = []
+
+        for i in tqdm(range(high_sc_dataset.num_batch_per_epoch)):
+        
+            data = next(iter(high_sc_dataset))
+        
+            X  = data['y']
+            summs_out = apply_embedding(X)
+            summaries_high_sc.append(summs_out)
+
+
+        summaries_low_sc = []
+
+        for i in tqdm(range(low_sc_dataset.num_batch_per_epoch)):
+        
+            data = next(iter(low_sc_dataset))
+        
+            X  = data['y']
+            summs_out = apply_embedding(X)
+            summaries_low_sc.append(summs_out)
+        
         
         
         # save all summaries from patch A to pull in
@@ -1194,6 +1271,10 @@ if __name__ == "__main__":
 
                 summaries_no_baryons=np.concatenate(summaries_no_baryons,0),
                 summaries_baryons=np.concatenate(summaries_baryons,0),
+
+                summaries_high_sc=np.concatenate(summaries_high_sc,0),
+                summaries_low_sc=np.concatenate(summaries_low_sc,0),
+
                 # save file lists as well
                 train_files=train_files,
                 test_files=test_files,
