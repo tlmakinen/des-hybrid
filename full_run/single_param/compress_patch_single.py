@@ -585,8 +585,8 @@ if __name__ == "__main__":
     # Example: parser.add_argument('-o', '--option', type=str, help='An example option')
     parser.add_argument('-c', '--config', type=str, help='config file path')
     parser.add_argument('-p', '--patch', type=str, help='which patch to compress', default="A")
-    #parser.add_argument('-s', '--create_summary_file', action="store_true", 
-    #                    help="whether or not to create a new summary file; defaults to True")
+    parser.add_argument('-pr', '--param', type=int, help='which parameter we should compress', default=0)
+
     parser.add_argument('-s', '--summary_file', type=str, 
                         help="existing summary file for complementary patch training")
     parser.add_argument('-t', '--no_train', type=bool, default=False, 
@@ -606,14 +606,20 @@ if __name__ == "__main__":
 
     print("\n---------------------\n")
     print("\n< beginning hybrid compression >\n")
-    print("\n---------------------\n")
 
-    
     print("summary file arg", args.summary_file)
 
 
-    from compress_cls2 import *
+    from compress_cls_single import *
     # these should have been imported from the Cls script
+
+
+    # WHICH PARAMETER ARE WE OPERATING ON ???
+    param_idx = args.param
+    param_names = ["Om", "S8", "w"]
+    param_name = param_names[param_idx]
+
+    print("operating on %s"%(param_name))
 
 
     cls_stats_file = jnp.load(config["cls"]["cls_normalisation_stats_filename"])
@@ -735,9 +741,12 @@ if __name__ == "__main__":
         
         # summaries code
         # SOME IMPORTANT HYPERPARAMS --> FROM CONFIG
+
+
+
         N_PARAMS = config["n_params"]
 
-        N_SUMMARIES_CLS = config["n_summaries"]["cls"]    # default 10
+        N_SUMMARIES_CLS = config["n_summaries"]["cls"]   # default 10
         N_SUMMARIES_A =   config["n_summaries"]["A"]
         N_SUMMARIES_B =   config["n_summaries"]["B"]
         N_SUMMARIES_C =   config["n_summaries"]["C"]
@@ -791,7 +800,9 @@ if __name__ == "__main__":
 
         else:
             #summary_file_path = config["summary_path"] + "patch_%s"%(patch) + ".npz"
-            summary_file_path = os.path.join(config["project_dir"], args.summary_file)
+
+            # LOCATE SUMMARY FILE UNDERNEATH PARAMETER NAME OF INTEREST
+            summary_file_path = os.path.join(config["project_dir"], param_name, args.summary_file)
             print("loading existing summary file from %s"%(summary_file_path))
             summaries_A_file = np.load(summary_file_path)
 
@@ -855,17 +866,51 @@ if __name__ == "__main__":
     #slice_cls = lambda d: slice_cls(d, cut_idx=cut_idx)
     #slice_cls_single = lambda d: slice_cls_single(d, cut_idx=cut_idx)
 
-    key = jax.random.PRNGKey(0) # pseudo-random key for Jax network.
-    cls_model = ClsModel(n_summaries=config["n_summaries"]["cls"],
-                         slice_cls_single=slice_cls_single)
+    if bool(config["single_param"]):
+        print('getting per-parameter Cls networks')
 
-    cls_single_shape = (10, 2, 4, 28,)
-    clsdir = os.path.join(config["project_dir"],  config["cls"]["net_dir"])
-    w_cls_compress = load_obj(os.path.join(clsdir, config["cls"]["w_filename"]))
+        key = jax.random.PRNGKey(0) # pseudo-random key for Jax network.
+        cls_model = ClsModel(n_summaries=config["n_summaries"]["cls"],
+                            slice_cls_single=slice_cls_single)
 
-    cls_compression = lambda d: cls_model.apply(w_cls_compress, d, method=cls_model.get_embed)
+        cls_single_shape = (10, 2, 4, 28,)
+        clsdir = os.path.join(config["project_dir"],  config["cls"]["net_dir"])
+        w_cls_compress = load_obj(os.path.join(clsdir, config["cls"]["w_filename"]))
+
+        
+        #def apply_cls(data, ws, cls_model):
+            # same model for each set of summaries
+        #    summs = jnp.concatenate([cls_model.apply(w, \
+        #                                             data, method=cls_model.get_embed) for w in \
+        #                                             w_cls_compress], 0)
+
+        #    return summs
+
+        #cls_compression = lambda d: apply_cls(d, w_cls_compress, cls_model)
+
+        cls_compression = lambda d: cls_model.apply(w_cls_compress[param_idx], d, method=cls_model.get_embed)
 
 
+    else:
+
+        key = jax.random.PRNGKey(0) # pseudo-random key for Jax network.
+        cls_model = ClsModel(n_summaries=config["n_summaries"]["cls"],
+                            slice_cls_single=slice_cls_single)
+
+        cls_single_shape = (10, 2, 4, 28,)
+        clsdir = os.path.join(config["project_dir"],  config["cls"]["net_dir"])
+        w_cls_compress = load_obj(os.path.join(clsdir, config["cls"]["w_filename"]))
+
+        cls_compression = lambda d: cls_model.apply(w_cls_compress, d, method=cls_model.get_embed)
+
+
+
+    print('testing summary output path')
+    outname = os.path.join(config["summary_path"], param_name)
+    outname = outname + "/" + "summaries_" + config["run_name"] + "_" + patch + args.custom_name # add in custom name
+    print("saving summaries to", outname)
+
+    print("\n---------------------\n")
 
 # ----------------------------------------------------------------------------
 
@@ -958,6 +1003,7 @@ if __name__ == "__main__":
                                         "cls": jnp.ones((10,2,4,28))}
                                         })
     data = next(iter(train_dataset))
+    #print('tehta dim: ', data['theta'].shape)
     #print(data['y']['A']['summaries'].shape)
     appl = lambda d: patch_net.apply(wembed, d)
     outs = jax.vmap(appl)(data['y'])
@@ -972,6 +1018,7 @@ if __name__ == "__main__":
         n_extra: int
         n_params: int = 3
         n_components: int = 4
+        param_idx: int = param_idx
 
         def setup(self):
             self.mdn = MDN(
@@ -1008,6 +1055,8 @@ if __name__ == "__main__":
             return self.mdn(x, y) 
         
         def __call__(self, x, y):
+            # grab the parameter that we care about for minimising the los
+            y = y[self.param_idx]
             return self.log_prob(x, y)
 
         
@@ -1028,12 +1077,15 @@ if __name__ == "__main__":
     # instatiate minimiser code
     epe_minimiser = EPE_minimiser(density_estimator=model)
 
+    # organised by parameter now
+    outdir = os.path.join(config["project_dir"], param_name, "patch_%s_net_%s/"%(patch, config["run_name"]))
 
-    outdir = os.path.join(config["project_dir"], "patch_%s_net_%s/"%(patch, config["run_name"]))
+    #outdir = os.path.join(outdir, param_name + "/")
     # load_dir = ...
 
     if train: 
 
+        print("\n---------------------\n")
         print('training compression ...')
 
         if load_weights:
@@ -1058,7 +1110,12 @@ if __name__ == "__main__":
         )
 
         # add custom name to safeguard against deleting previous run
+        #outdir += param_name
+        
+        # save in subdirectory by cosmological parameter
+        Path(outdir).mkdir(parents=True, exist_ok=True)
         outdir += args.custom_name
+
 
 
 
@@ -1288,7 +1345,8 @@ if __name__ == "__main__":
                 )
 
     # TODO: make this naming more clever
-    outname = config["summary_path"] + config["run_name"] + "_" + patch + args.custom_name # add in custom name
+    outname = os.path.join(config["summary_path"], param_name)
+    outname = outname + "/" + "summaries_" + config["run_name"] + "_" + patch + args.custom_name # add in custom name
     print("saving summaries to", outname)
 
     get_unshuffled_summaries(outname, summaries_A_file)
