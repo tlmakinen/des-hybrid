@@ -855,8 +855,24 @@ if __name__ == "__main__":
     #slice_cls = lambda d: slice_cls(d, cut_idx=cut_idx)
     #slice_cls_single = lambda d: slice_cls_single(d, cut_idx=cut_idx)
 
+    try:
+        actname = config["cls"]["act"]
+        if actname == "relu":
+            act = nn.relu
+        elif actname == "leaky_relu":
+            act = nn.leaky_relu
+        else:
+            actname = 'smooth_leaky'
+            act = smooth_leaky
+    except:
+        actname = 'smooth_leaky'
+        act = smooth_leaky # default activation fn
+
+    print('proceeding with Cls activation function', actname)
+
     key = jax.random.PRNGKey(0) # pseudo-random key for Jax network.
     cls_model = ClsModel(n_summaries=config["n_summaries"]["cls"],
+                         act=act,
                          slice_cls_single=slice_cls_single)
 
     cls_single_shape = (10, 2, 4, 28,)

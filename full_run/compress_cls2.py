@@ -81,6 +81,7 @@ class ClsModel(EPEModel, nn.Module):
     n_params: int = 3
     n_components: int = 4
     n_hidden_mdn: int = 100
+    act: Callable = smooth_leaky
     
 
     def setup(self):
@@ -94,7 +95,7 @@ class ClsModel(EPEModel, nn.Module):
                         hidden_channels=[256]*10,
                         n_summaries=self.n_summaries,
                         slice_cls_single=self.slice_cls_single,
-                        act=smooth_leaky,
+                        act=self.act,
                         sigmoid_out=False)
     
         #self.norm = nn.LayerNorm()
@@ -170,10 +171,26 @@ def main():
 
     key = jr.PRNGKey(4)
     cls_single_shape = (10, 2, 4, 28,)
+    
+    try:
+        actname = config["cls"]["act"]
+        if actname == "relu":
+            act = nn.relu
+        elif actname == "leaky_relu":
+            act = nn.leaky_relu
+        else:
+            actname = 'smooth_leaky'
+            act = smooth_leaky
+    except:
+        actname = 'smooth_leaky'
+        act = smooth_leaky # default activation fn
+
+    print('proceeding with Cls activation function', act)
 
 
     model = ClsModel(n_summaries=int(config["n_summaries"]["cls"]),
                      slice_cls_single=slice_cls_single,
+                     act=act,
                     n_hidden_mdn=config["cls"]["n_hidden_mdn"])
 
     w = model.init(key, cls_train[0], jnp.ones(3,), method=model.log_prob)
