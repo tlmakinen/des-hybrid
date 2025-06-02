@@ -19,8 +19,8 @@ import sys,os
 from collections.abc import Iterable
 from typing import Callable, Sequence, Any
 
-import haiku as hk
-import haiku.experimental.flax as hkflax
+# import haiku as hk
+# import haiku.experimental.flax as hkflax
 import flax.linen as nn
 import jax
 from jax import numpy as jnp
@@ -514,67 +514,67 @@ class EPE_minimiser():
 
 
 # pylint: disable=too-many-arguments
-def my_make_mdn(
-    n_dimension: int,
-    n_components: int,
-    hidden_sizes: Iterable[int] = (64, 64),
-    activation: Callable = jax.nn.swish,
-    embedding_net: nn.Module = None,
-):
-    """Create a mixture density network
+# def my_make_mdn(
+#     n_dimension: int,
+#     n_components: int,
+#     hidden_sizes: Iterable[int] = (64, 64),
+#     activation: Callable = jax.nn.swish,
+#     embedding_net: nn.Module = None,
+# ):
+#     """Create a mixture density network
 
-    Args:
-        n_dimension: dimensionality of theta
-        n_components: number of mixture components
-        hidden_sizes: sizes of hidden layers for each normalizing flow. E.g.,
-            when the hidden sizes are a tuple (64, 64), then each maf layer
-            uses a MADE with two layers of size 64 each
-        activation: a jax activation function
+#     Args:
+#         n_dimension: dimensionality of theta
+#         n_components: number of mixture components
+#         hidden_sizes: sizes of hidden layers for each normalizing flow. E.g.,
+#             when the hidden sizes are a tuple (64, 64), then each maf layer
+#             uses a MADE with two layers of size 64 each
+#         activation: a jax activation function
 
-    Returns:
-        a normalizing flow model
-    """
+#     Returns:
+#         a normalizing flow model
+#     """
 
-    @hk.transform
-    def mdn(method, **kwargs):
+#     @hk.transform
+#     def mdn(method, **kwargs):
 
-        #n = kwargs["x"].shape[0]
-        #x = jnp.array(kwargs["x"])
-        n = jax.tree.leaves(kwargs["x"])[0].shape[0] # all elements of data dict should be batched
-        x = kwargs["x"]
+#         #n = kwargs["x"].shape[0]
+#         #x = jnp.array(kwargs["x"])
+#         n = jax.tree.leaves(kwargs["x"])[0].shape[0] # all elements of data dict should be batched
+#         x = kwargs["x"]
 
-        #print("x mdn input", x.shape)
+#         #print("x mdn input", x.shape)
 
-        # optional embedding network
-        if embedding_net is not None:
-          mod = hkflax.lift(embedding_net, name='flax_embedding_net')
-          # add in a vmap here
-          x = jax.vmap(mod)(x)
+#         # optional embedding network
+#         if embedding_net is not None:
+#           mod = hkflax.lift(embedding_net, name='flax_embedding_net')
+#           # add in a vmap here
+#           x = jax.vmap(mod)(x)
 
-        xembed = x
-        # rest of network
-        hidden = hk.nets.MLP(
-            hidden_sizes, activation=activation, activate_final=True
-        )(x)
-        #print("hidden", hidden.shape)
-        logits = hk.Linear(n_components)(hidden)
-        mu_sigma = hk.Linear(n_components * n_dimension * 2)(hidden)
-        mu, sigma = jnp.split(mu_sigma, 2, axis=-1)
+#         xembed = x
+#         # rest of network
+#         hidden = hk.nets.MLP(
+#             hidden_sizes, activation=activation, activate_final=True
+#         )(x)
+#         #print("hidden", hidden.shape)
+#         logits = hk.Linear(n_components)(hidden)
+#         mu_sigma = hk.Linear(n_components * n_dimension * 2)(hidden)
+#         mu, sigma = jnp.split(mu_sigma, 2, axis=-1)
 
-        mixture = tfd.MixtureSameFamily(
-            tfd.Categorical(logits=logits),
-            tfd.MultivariateNormalDiag(
-                mu.reshape(n, n_components, n_dimension),
-                nn.softplus(sigma.reshape(n, n_components, n_dimension)),
-            ),
-        )
-        if method == "sample":
-            return mixture.sample(seed=hk.next_rng_key())
-        elif method == "embedding":
-            # could also return logits, mu_sigma
-            return xembed
-        else:
-            return mixture.log_prob(kwargs["y"])
+#         mixture = tfd.MixtureSameFamily(
+#             tfd.Categorical(logits=logits),
+#             tfd.MultivariateNormalDiag(
+#                 mu.reshape(n, n_components, n_dimension),
+#                 nn.softplus(sigma.reshape(n, n_components, n_dimension)),
+#             ),
+#         )
+#         if method == "sample":
+#             return mixture.sample(seed=hk.next_rng_key())
+#         elif method == "embedding":
+#             # could also return logits, mu_sigma
+#             return xembed
+#         else:
+#             return mixture.log_prob(kwargs["y"])
 
-    return mdn
+#     return mdn
 
