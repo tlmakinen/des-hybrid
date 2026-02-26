@@ -3,3 +3,10 @@ sbi-logs/SNLE_A/2025-02-13T15_59_41.544214/events.out.tfevents.1739458781.h12.62
 
 
 sbi-logs/*
+
+*tfevents.*
+*.npz
+*.png
+*.pkl
+
+unblinding/sbi-logs/*
